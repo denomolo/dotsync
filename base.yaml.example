@@ -1,0 +1,19 @@
+# base/vars/base.yaml — shared template variables
+#
+# These are available in all .j2 templates across all profiles.
+# Override any of these in profiles/<name>/vars/<name>.yaml
+
+hostname: my-machine
+email: you@example.com
+name: Your Name
+
+# Editor
+editor: nvim
+default_shell: zsh
+
+# Git
+git_default_branch: main
+git_sign_commits: false
+
+# Theme (used by starship, alacritty etc.)
+theme: catppuccin-mocha

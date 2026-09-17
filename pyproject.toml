@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dotsync"
+version = "0.1.0"
+description = "Bidirectional dotfiles sync with git, profiles, and templating"
+requires-python = ">=3.11"
+dependencies = [
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+dotsync = "dotsync.__main__:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dotsync*"]

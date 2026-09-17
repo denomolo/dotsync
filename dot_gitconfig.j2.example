@@ -1,0 +1,32 @@
+# base/files/dot_gitconfig.j2
+# Rendered by dotsync — do not edit ~/.gitconfig directly.
+
+[user]
+    name  = {{ name }}
+    email = {{ email }}
+{% if git_sign_commits %}
+    signingkey = {{ gpg_key_id | default('') }}
+
+[commit]
+    gpgsign = true
+{% endif %}
+
+[core]
+    editor     = {{ editor }}
+    autocrlf   = input
+    excludesfile = ~/.gitignore_global
+
+[init]
+    defaultBranch = {{ git_default_branch }}
+
+[pull]
+    rebase = false
+
+[push]
+    autoSetupRemote = true
+
+[alias]
+    st  = status -sb
+    lg  = log --oneline --graph --decorate --all
+    co  = checkout
+    undo = reset --soft HEAD~1
