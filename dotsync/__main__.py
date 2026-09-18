@@ -23,7 +23,7 @@ from pathlib import Path
 import click
 
 from .config import Config, CONFIG_PATH
-from .repo import Repo, GitError
+from .repo import Repo, GitError, normalize_github_url
 from .sync import Action, Syncer
 from . import systemd
 
@@ -90,11 +90,15 @@ def cli():
 # ── install ────────────────────────────────────────────────────────────────────
 
 @cli.command()
-@click.option("--repo-url", prompt="GitHub repo URL", help="SSH or HTTPS URL of your dotfiles repo.")
+@click.option("--repo-url", prompt="GitHub repo URL", help="SSH/HTTPS URL or owner/repo shorthand; HTTPS GitHub URLs are converted to SSH to use your existing key.")
 @click.option("--profile", default="base", show_default=True, help="Initial profile name.")
 @click.option("--clone/--init", default=True, help="Clone existing repo or init a new one.")
 def install(repo_url: str, profile: str, clone: bool):
     """First-time setup: clone/init repo, write config, install systemd service."""
+    normalized = normalize_github_url(repo_url)
+    if normalized != repo_url:
+        click.echo(f"Using SSH (existing GitHub key) instead of HTTPS: {normalized}")
+        repo_url = normalized
     cfg = Config(repo_url=repo_url, profile=profile)
 
     if cfg.repo_path.exists() and (cfg.repo_path / ".git").exists():

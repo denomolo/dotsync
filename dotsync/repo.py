@@ -11,12 +11,33 @@ because libgit2's merge support is incomplete.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 
 class GitError(Exception):
     pass
+
+
+_HTTPS_GITHUB_RE = re.compile(r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$")
+_SHORTHAND_RE = re.compile(r"^(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)$")
+
+
+def normalize_github_url(url: str) -> str:
+    """Prefer the existing GitHub SSH key over HTTPS auth prompts.
+
+    Rewrites an https://github.com/... URL (or an owner/repo shorthand) to
+    the equivalent git@github.com:owner/repo.git SSH form. Anything else
+    (an existing ssh/git URL, a non-GitHub host, a local path) passes through
+    unchanged.
+    """
+    m = _HTTPS_GITHUB_RE.match(url.strip())
+    if not m:
+        m = _SHORTHAND_RE.match(url.strip())
+    if not m:
+        return url
+    return f"git@github.com:{m.group('owner')}/{m.group('repo')}.git"
 
 
 class Repo:
