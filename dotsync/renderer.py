@@ -65,6 +65,7 @@ class Renderer:
 
         - If the file ends in .j2, renders as a Jinja2 template.
         - Otherwise, returns raw bytes.
+        - Directories can't be rendered; use resolve_source() and copy them.
 
         Profile files take precedence over base files for templates
         (Jinja2 FileSystemLoader searches in order: base, then profile —
@@ -72,14 +73,16 @@ class Renderer:
         select_template logic below).
         """
         # Resolve absolute path: profile overrides base
-        abs_path = self._resolve_source(source_rel)
+        abs_path = self.resolve_source(source_rel)
 
+        if abs_path.is_dir():
+            raise RenderError(f"Cannot render a directory: {source_rel}")
         if source_rel.endswith(".j2") or abs_path.suffix == ".j2":
             return self._render_template(abs_path)
         else:
             return abs_path.read_bytes()
 
-    def _resolve_source(self, source_rel: str) -> Path:
+    def resolve_source(self, source_rel: str) -> Path:
         """
         Find the actual file on disk, preferring profile over base.
         source_rel is relative to the repo root.

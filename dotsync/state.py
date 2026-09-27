@@ -77,13 +77,33 @@ class State:
         return self.files.get(str(dest))
 
     def record(self, dest: Path, content: bytes) -> None:
+        self.record_hash(dest, sha256(content))
+
+    def record_hash(self, dest: Path, digest: str) -> None:
         self.files[str(dest)] = FileState(
-            last_applied_hash=sha256(content),
+            last_applied_hash=digest,
             last_applied_at=datetime.now(timezone.utc).isoformat(),
         )
 
 
 # ── Hashing ────────────────────────────────────────────────────────────────────
+
+# Directory entries never synced (nested git checkouts would become submodules)
+IGNORED_NAMES = {".git"}
+
+
+def iter_dir_files(path: Path):
+    """
+    Yield regular files under path (recursive, sorted), skipping
+    IGNORED_NAMES and symlinks. rglob doesn't descend into symlinked
+    directories, so nothing reached through a link is yielded either.
+    """
+    for child in sorted(path.rglob("*")):
+        rel = child.relative_to(path)
+        if IGNORED_NAMES.intersection(rel.parts) or child.is_symlink():
+            continue
+        if child.is_file():
+            yield child
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -106,11 +126,9 @@ def sha256_dir(path: Path) -> Optional[str]:
     if not path.is_dir():
         return None
     h = hashlib.sha256()
-    for child in sorted(path.rglob("*")):
-        if child.is_file():
-            rel = str(child.relative_to(path))
-            h.update(rel.encode())
-            h.update(child.read_bytes())
+    for child in iter_dir_files(path):
+        h.update(str(child.relative_to(path)).encode())
+        h.update(child.read_bytes())
     return h.hexdigest()
 
 

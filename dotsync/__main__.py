@@ -7,6 +7,7 @@ Usage:
     dotsync push [--dry-run]         Force disk → git
     dotsync pull [--dry-run]         Force git → disk
     dotsync status                   Show per-file state
+    dotsync add <local> [<remote>]   Track a file/dir (remote defaults to base/files/<name>)
     dotsync profile list             List available profiles
     dotsync profile set <name>       Switch active profile
     dotsync profile new <name>       Create a new profile branch
@@ -178,6 +179,36 @@ def status():
     syncer = Syncer(cfg, dry_run=True)
     results = syncer.status()
     print_results(results, verbose=True)
+
+
+# ── add ────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("local", type=click.Path(exists=True, path_type=Path))
+@click.argument("remote", required=False)
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def add(local: Path, remote: str | None, dry_run: bool):
+    """Start tracking LOCAL (a file or directory), stored at base/files/REMOTE.
+
+    REMOTE defaults to the root of base/files (keeping LOCAL's name). If
+    REMOTE ends with / or is an existing directory, LOCAL's name is kept
+    inside it. Directories are copied verbatim (no .j2 rendering).
+
+    Symlinks are never copied: LOCAL itself can't be a symlink, and
+    symlinks inside a directory (plus nested .git directories) are skipped
+    and left untouched on every sync.
+    """
+    cfg = load_config_or_exit()
+    syncer = Syncer(cfg, dry_run=dry_run)
+    try:
+        result = syncer.add(local, remote)
+    except (ValueError, GitError) as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
+    print_results([result], verbose=True)
+    if result.error:
+        sys.exit(1)
+    click.echo(f"  Tracking as {click.style(result.source, fg='cyan')}")
 
 
 # ── profile ────────────────────────────────────────────────────────────────────

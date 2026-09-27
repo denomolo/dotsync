@@ -18,6 +18,7 @@ Conflict resolution modes:
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,10 +26,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
 from .config import Config
 from .renderer import Renderer, RenderError
 from .repo import Repo, GitError
-from .state import State, hash_path, sha256
+from .state import IGNORED_NAMES, State, hash_path, iter_dir_files, sha256, sha256_dir
 
 
 class Action(Enum):
@@ -110,6 +113,66 @@ class Syncer:
         finally:
             self.dry_run = old_dry
 
+    def add(self, local: Path, remote: str | None = None) -> FileResult:
+        """
+        Start tracking a local file or directory.
+
+        Copies `local` into base/files/<remote> (remote defaults to the
+        basename, i.e. the root of base/files), appends a manifest entry,
+        records state, then commits and pushes.
+        """
+        branch = f"profiles/{self.config.profile}"
+        dest = local.expanduser().absolute()
+        if not dest.exists():
+            raise ValueError(f"Local path not found: {dest}")
+        if dest.is_symlink():
+            raise ValueError(f"Symlinks are not tracked: {dest}")
+
+        files_root = self.config.repo_path / "base" / "files"
+        rel = remote.strip("/") if remote else ""
+        if not rel or remote.endswith("/") or (files_root / rel).is_dir():
+            rel = f"{rel}/{dest.name}".lstrip("/")
+        repo_source = (files_root / rel).resolve()
+        if not repo_source.is_relative_to(files_root.resolve()):
+            raise ValueError(f"Remote path escapes base/files: {remote}")
+        source = f"base/files/{repo_source.relative_to(files_root.resolve())}"
+
+        manifest = self.renderer.load_manifest()
+        for entry in manifest:
+            if Path(entry["dest"]) == dest:
+                raise ValueError(f"{dest} is already tracked (source: {entry['source']})")
+            if entry["source"] == source:
+                raise ValueError(f"{source} is already used by {entry['dest']}")
+        if repo_source.exists():
+            raise ValueError(f"{source} already exists in the repo")
+
+        if self.dry_run:
+            return FileResult(dest=dest, source=source, action=Action.PUSH)
+
+        self.repo.checkout(branch)
+        result = self._push_file(source, dest)
+        if result.error:
+            return result
+        self._append_manifest_entry(source, dest)
+        self._git_commit_and_push(branch, message=f"add: {source}")
+        self.state.save()
+        return result
+
+    def _append_manifest_entry(self, source: str, dest: Path) -> None:
+        """Append to manifest.yaml as text so existing comments are preserved."""
+        manifest_path = self.config.repo_path / "manifest.yaml"
+        text = manifest_path.read_text()
+        home = str(Path.home())
+        dest_str = "~" + str(dest)[len(home):] if str(dest).startswith(home + "/") else str(dest)
+
+        # Scaffolded manifests start as `files: []`, which can't be appended to
+        text = re.sub(r"^files:\s*\[\]\s*$", "files:", text, count=1, flags=re.MULTILINE)
+        if not text.endswith("\n"):
+            text += "\n"
+        entry = yaml.safe_dump([{"source": source, "dest": dest_str}], sort_keys=False)
+        text += "\n" + "".join(f"  {line}\n" for line in entry.splitlines())
+        manifest_path.write_text(text)
+
     # ── Per-file logic ─────────────────────────────────────────────────────────
 
     def _process_entry(self, entry: dict) -> FileResult:
@@ -117,11 +180,17 @@ class Syncer:
         dest = Path(entry["dest"])
 
         try:
-            rendered = self.renderer.render(source)
+            abs_source = self.renderer.resolve_source(source)
+            if abs_source.is_dir():
+                # Directories are copied verbatim, never rendered
+                rendered = None
+                repo_hash = sha256_dir(abs_source)
+            else:
+                rendered = self.renderer.render(source)
+                repo_hash = sha256(rendered)
         except RenderError as e:
             return FileResult(dest=dest, source=source, action=Action.NOTHING, error=str(e))
 
-        repo_hash    = sha256(rendered)
         disk_hash    = hash_path(dest)
         state_entry  = self.state.get(dest)
         last_hash    = state_entry.last_applied_hash if state_entry else None
@@ -137,7 +206,7 @@ class Syncer:
             elif disk_hash == repo_hash:
                 # Already in sync, just record state
                 if not self.dry_run:
-                    self.state.record(dest, rendered)
+                    self.state.record_hash(dest, repo_hash)
                 return FileResult(dest=dest, source=source, action=Action.NOTHING)
             else:
                 # Disk has content, repo has different content, no prior state
@@ -154,7 +223,7 @@ class Syncer:
 
         return self._act(source, dest, rendered, action)
 
-    def _act(self, source: str, dest: Path, rendered: bytes, action: Action) -> FileResult:
+    def _act(self, source: str, dest: Path, rendered: bytes | None, action: Action) -> FileResult:
         if action == Action.NOTHING:
             return FileResult(dest=dest, source=source, action=action)
 
@@ -172,14 +241,23 @@ class Syncer:
     # ── Atomic file operations ─────────────────────────────────────────────────
 
     def _pull_file(self, source: str, dest: Path, rendered: bytes | None = None) -> FileResult:
-        """Write rendered repo content to disk."""
-        if rendered is None:
-            try:
+        """Write rendered repo content (or a mirrored directory) to disk."""
+        try:
+            abs_source = self.renderer.resolve_source(source)
+            if rendered is None and not abs_source.is_dir():
                 rendered = self.renderer.render(source)
-            except RenderError as e:
-                return FileResult(dest=dest, source=source, action=Action.PULL, error=str(e))
+        except RenderError as e:
+            return FileResult(dest=dest, source=source, action=Action.PULL, error=str(e))
 
         if self.dry_run:
+            return FileResult(dest=dest, source=source, action=Action.PULL)
+
+        if abs_source.is_dir():
+            try:
+                _mirror_dir(abs_source, dest)
+            except Exception as e:
+                return FileResult(dest=dest, source=source, action=Action.PULL, error=str(e))
+            self.state.record_hash(dest, sha256_dir(abs_source))
             return FileResult(dest=dest, source=source, action=Action.PULL)
 
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -208,22 +286,24 @@ class Syncer:
         repo_source.parent.mkdir(parents=True, exist_ok=True)
         try:
             if dest.is_dir():
-                if repo_source.exists():
-                    shutil.rmtree(repo_source)
-                shutil.copytree(dest, repo_source)
+                _mirror_dir(dest, repo_source)
             else:
+                if repo_source.is_dir():
+                    shutil.rmtree(repo_source)
                 shutil.copy2(dest, repo_source)
         except Exception as e:
             return FileResult(dest=dest, source=source, action=Action.PUSH, error=str(e))
 
         # Update state to reflect current disk content
-        rendered = repo_source.read_bytes() if repo_source.is_file() else b""
-        self.state.record(dest, rendered)
+        if repo_source.is_dir():
+            self.state.record_hash(dest, sha256_dir(repo_source))
+        else:
+            self.state.record(dest, repo_source.read_bytes())
         return FileResult(dest=dest, source=source, action=Action.PUSH)
 
     # ── Conflict resolution ────────────────────────────────────────────────────
 
-    def _resolve_conflict(self, source: str, dest: Path, rendered: bytes) -> FileResult:
+    def _resolve_conflict(self, source: str, dest: Path, rendered: bytes | None) -> FileResult:
         mode = self.config.conflict_resolution
 
         if mode == "machine-wins":
@@ -238,8 +318,8 @@ class Syncer:
 
         # last-write-wins: compare disk mtime vs repo file mtime
         repo_source = self.config.repo_path / source
-        disk_mtime = dest.stat().st_mtime if dest.exists() else 0
-        repo_mtime = repo_source.stat().st_mtime if repo_source.exists() else 0
+        disk_mtime = _mtime(dest)
+        repo_mtime = _mtime(repo_source)
 
         if disk_mtime >= repo_mtime:
             result = self._push_file(source, dest)
@@ -262,13 +342,56 @@ class Syncer:
             # Non-fatal: offline sync still works
             print(f"  [warn] Could not pull from remote: {e}")
 
-    def _git_commit_and_push(self, branch: str) -> None:
+    def _git_commit_and_push(self, branch: str, message: str | None = None) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         try:
             self.repo.checkout(branch)
             self.repo.add_all()
-            committed = self.repo.commit(f"sync: {timestamp}")
+            committed = self.repo.commit(message or f"sync: {timestamp}")
             if committed and self.config.auto_push:
                 self.repo.push(branch)
         except GitError as e:
             print(f"  [warn] Git commit/push failed: {e}")
+
+
+# ── Directory helpers ──────────────────────────────────────────────────────────
+
+def _mtime(path: Path) -> float:
+    """mtime of a file, or the newest file mtime inside a directory (0 if missing)."""
+    if path.is_dir():
+        return max((f.stat().st_mtime for f in iter_dir_files(path)), default=0)
+    return path.stat().st_mtime if path.exists() else 0
+
+
+def _mirror_dir(src: Path, dst: Path) -> None:
+    """
+    Make dst's contents match src: copy every file over, then delete files
+    and emptied directories in dst that src doesn't have. Entries in
+    IGNORED_NAMES and symlinks are neither copied nor deleted, and are
+    never written through.
+    """
+    if dst.exists() and not dst.is_dir():
+        dst.unlink()
+    dst.mkdir(parents=True, exist_ok=True)
+
+    wanted = set()
+    for f in iter_dir_files(src):
+        rel = f.relative_to(src)
+        wanted.add(rel)
+        target = dst / rel
+        if target.is_symlink():
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, target)
+
+    # Deepest paths first so directories are empty by the time we reach them
+    for child in sorted(dst.rglob("*"), reverse=True):
+        rel = child.relative_to(dst)
+        if rel in wanted or IGNORED_NAMES.intersection(rel.parts) or child.is_symlink():
+            continue
+        if child.is_file():
+            child.unlink()
+        elif child.is_dir() and not (src / rel).is_dir() and not any(child.iterdir()):
+            child.rmdir()
