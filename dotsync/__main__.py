@@ -8,6 +8,7 @@ Usage:
     dotsync pull [--dry-run]         Force git → disk
     dotsync status                   Show per-file state
     dotsync add <local> [<remote>]   Track a file/dir (remote defaults to base/files/<name>)
+    dotsync remove <local>           Stop tracking a file/dir (disk copy is kept)
     dotsync profile list             List available profiles
     dotsync profile set <name>       Switch active profile
     dotsync profile new <name>       Create a new profile branch
@@ -23,6 +24,7 @@ from pathlib import Path
 
 import click
 
+from . import __version__
 from .config import Config, CONFIG_PATH
 from .repo import Repo, GitError, normalize_github_url
 from .sync import Action, Syncer
@@ -36,6 +38,7 @@ ACTION_SYMBOLS = {
     Action.PULL:     click.style("↓", fg="cyan"),
     Action.PUSH:     click.style("↑", fg="green"),
     Action.CONFLICT: click.style("!", fg="yellow"),
+    Action.UNTRACK:  click.style("−", fg="red"),
 }
 
 
@@ -45,15 +48,19 @@ def print_results(results, verbose: bool = False) -> None:
         sym = ACTION_SYMBOLS[r.action]
         dest = str(r.dest).replace(str(Path.home()), "~")
         line = f"  {sym}  {dest}"
+        if r.skipped:
+            sym = click.style("-", fg="bright_black")
+            line = f"  {sym}  {dest}" + click.style(f"  [skipped: {r.skipped}]", fg="bright_black")
         if r.resolved_by:
             line += click.style(f"  [{r.resolved_by}]", fg="yellow")
         if r.error:
             line += click.style(f"  ERROR: {r.error}", fg="red")
             errors += 1
-        if verbose or r.action != Action.NOTHING or r.error:
+        if verbose or r.action != Action.NOTHING or r.error or r.skipped:
             click.echo(line)
 
-    counts = {a: sum(1 for r in results if r.action == a) for a in Action}
+    counts = {a: sum(1 for r in results if r.action == a and not r.skipped) for a in Action}
+    skipped = sum(1 for r in results if r.skipped)
     parts = []
     if counts[Action.PULL]:
         parts.append(click.style(f"↓ {counts[Action.PULL]} pulled", fg="cyan"))
@@ -61,8 +68,12 @@ def print_results(results, verbose: bool = False) -> None:
         parts.append(click.style(f"↑ {counts[Action.PUSH]} pushed", fg="green"))
     if counts[Action.CONFLICT]:
         parts.append(click.style(f"! {counts[Action.CONFLICT]} conflicts", fg="yellow"))
+    if counts[Action.UNTRACK]:
+        parts.append(click.style(f"− {counts[Action.UNTRACK]} untracked", fg="red"))
     if counts[Action.NOTHING] and not parts:
         parts.append(click.style("already in sync", fg="bright_black"))
+    if skipped:
+        parts.append(click.style(f"{skipped} skipped", fg="bright_black"))
     if errors:
         parts.append(click.style(f"{errors} errors", fg="red"))
 
@@ -83,7 +94,7 @@ def load_config_or_exit() -> Config:
 # ── CLI root ───────────────────────────────────────────────────────────────────
 
 @click.group()
-@click.version_option("0.1.0", prog_name="dotsync")
+@click.version_option(__version__, prog_name="dotsync")
 def cli():
     """dotsync — bidirectional dotfile sync with profiles and templating."""
 
@@ -196,7 +207,8 @@ def add(local: Path, remote: str | None, dry_run: bool):
 
     Symlinks are never copied: LOCAL itself can't be a symlink, and
     symlinks inside a directory (plus nested .git directories) are skipped
-    and left untouched on every sync.
+    and left untouched on every sync. Binary files are skipped unless
+    include_binary: true is set in the config.
     """
     cfg = load_config_or_exit()
     syncer = Syncer(cfg, dry_run=dry_run)
@@ -209,6 +221,30 @@ def add(local: Path, remote: str | None, dry_run: bool):
     if result.error:
         sys.exit(1)
     click.echo(f"  Tracking as {click.style(result.source, fg='cyan')}")
+
+
+# ── remove ─────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("local", type=click.Path(path_type=Path))
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def remove(local: Path, dry_run: bool):
+    """Stop tracking LOCAL (a file or directory).
+
+    Removes its manifest entry and its copy in the repo. The file on disk
+    is left untouched. LOCAL may already be deleted from disk as long as
+    it is still tracked.
+    """
+    cfg = load_config_or_exit()
+    syncer = Syncer(cfg, dry_run=dry_run)
+    try:
+        result = syncer.remove(local)
+    except (ValueError, GitError) as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
+    print_results([result], verbose=True)
+    verb = "Would stop tracking" if dry_run else "No longer tracking"
+    click.echo(f"  {verb} {click.style(result.source, fg='cyan')} (disk copy kept)")
 
 
 # ── profile ────────────────────────────────────────────────────────────────────

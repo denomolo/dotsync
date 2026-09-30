@@ -79,6 +79,9 @@ class State:
     def record(self, dest: Path, content: bytes) -> None:
         self.record_hash(dest, sha256(content))
 
+    def forget(self, dest: Path) -> None:
+        self.files.pop(str(dest), None)
+
     def record_hash(self, dest: Path, digest: str) -> None:
         self.files[str(dest)] = FileState(
             last_applied_hash=digest,
@@ -91,18 +94,31 @@ class State:
 # Directory entries never synced (nested git checkouts would become submodules)
 IGNORED_NAMES = {".git"}
 
+# Bytes sniffed for binary detection (same heuristic as git: a NUL byte → binary)
+BINARY_SNIFF_BYTES = 8192
 
-def iter_dir_files(path: Path):
+
+def is_binary(path: Path) -> bool:
+    """True if the file looks binary (contains a NUL byte near the start)."""
+    try:
+        with path.open("rb") as f:
+            return b"\0" in f.read(BINARY_SNIFF_BYTES)
+    except (FileNotFoundError, IsADirectoryError):
+        return False
+
+
+def iter_dir_files(path: Path, include_binary: bool = False):
     """
     Yield regular files under path (recursive, sorted), skipping
-    IGNORED_NAMES and symlinks. rglob doesn't descend into symlinked
-    directories, so nothing reached through a link is yielded either.
+    IGNORED_NAMES, symlinks and (unless include_binary) binary files.
+    rglob doesn't descend into symlinked directories, so nothing reached
+    through a link is yielded either.
     """
     for child in sorted(path.rglob("*")):
         rel = child.relative_to(path)
         if IGNORED_NAMES.intersection(rel.parts) or child.is_symlink():
             continue
-        if child.is_file():
+        if child.is_file() and (include_binary or not is_binary(child)):
             yield child
 
 def sha256(data: bytes) -> str:
@@ -117,7 +133,7 @@ def sha256_file(path: Path) -> Optional[str]:
         return None
 
 
-def sha256_dir(path: Path) -> Optional[str]:
+def sha256_dir(path: Path, include_binary: bool = False) -> Optional[str]:
     """
     Return a stable hash of a directory's contents (recursive).
     Hash is computed over sorted relative paths + file contents.
@@ -126,14 +142,14 @@ def sha256_dir(path: Path) -> Optional[str]:
     if not path.is_dir():
         return None
     h = hashlib.sha256()
-    for child in iter_dir_files(path):
+    for child in iter_dir_files(path, include_binary):
         h.update(str(child.relative_to(path)).encode())
         h.update(child.read_bytes())
     return h.hexdigest()
 
 
-def hash_path(path: Path) -> Optional[str]:
+def hash_path(path: Path, include_binary: bool = False) -> Optional[str]:
     """Hash a file or directory."""
     if path.is_dir():
-        return sha256_dir(path)
+        return sha256_dir(path, include_binary)
     return sha256_file(path)

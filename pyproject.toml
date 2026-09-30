@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dotsync"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Bidirectional dotfiles sync with git, profiles, and templating"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,6 +15,9 @@ dependencies = [
 
 [project.scripts]
 dotsync = "dotsync.__main__:cli"
+
+[tool.setuptools.dynamic]
+version = {attr = "dotsync.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -22,6 +22,7 @@ class Config:
     profile: str = "base"
     conflict_resolution: ConflictResolution = "last-write-wins"
     auto_push: bool = True
+    include_binary: bool = False   # sync binary files too (default: text only)
     repo_path: Path = field(default_factory=lambda: Path("~/.local/share/dotsync/repo").expanduser())
     state_path: Path = field(default_factory=lambda: Path("~/.local/state/dotsync/state.json").expanduser())
 
@@ -47,6 +48,7 @@ class Config:
             profile=raw.get("profile", "base"),
             conflict_resolution=conflict,
             auto_push=raw.get("auto_push", True),
+            include_binary=raw.get("include_binary", False),
             repo_path=repo_path,
             state_path=state_path,
         )
@@ -58,6 +60,7 @@ class Config:
             "profile": profile,
             "conflict_resolution": "last-write-wins",
             "auto_push": True,
+            "include_binary": False,
             "repo_path": str(self.repo_path),
             "state_path": str(self.state_path),
         }
