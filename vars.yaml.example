@@ -1,7 +1,7 @@
-# base/vars/base.yaml — shared template variables
+# vars.yaml — template variables
 #
-# These are available in all .j2 templates across all profiles.
-# Override any of these in profiles/<name>/vars/<name>.yaml
+# These are available in all .j2 templates. On a profile branch, edit this
+# file to override them for that profile; base changes are merged in on sync.
 
 hostname: my-machine
 email: you@example.com

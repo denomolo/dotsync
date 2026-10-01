@@ -3,7 +3,10 @@ repo.py — Git operations for dotsync.
 
 Branch model:
   base              ← shared files, all profiles merge from here
-  profiles/<name>   ← profile-specific overrides on top of base
+  profiles/<name>   ← base plus profile-specific commits
+
+Every branch has the same layout: files/ (the dotfiles), vars.yaml
+(template variables) and manifest.yaml (what goes where on disk).
 
 Deliberately shells out to git rather than using libgit2/pygit2,
 because libgit2's merge support is incomplete.
@@ -78,16 +81,15 @@ class Repo:
         repo._run("init", "-b", "base")
         repo._run("remote", "add", "origin", url)
 
-        # Scaffold directory structure
-        for d in ["base/files", "base/vars", "profiles"]:
-            (path / d).mkdir(parents=True, exist_ok=True)
+        (path / "files").mkdir(parents=True, exist_ok=True)
+        (path / "files" / ".keep").touch()
 
         # Initial manifest and vars
         manifest = path / "manifest.yaml"
         if not manifest.exists():
             manifest.write_text(
                 "# dotsync manifest\n"
-                "# Each entry maps a source (relative to repo profile root) to a destination.\n"
+                "# Each entry maps a source (relative to the repo root) to a destination.\n"
                 "#\n"
                 "# files:\n"
                 "#   - source: files/dot_zshrc.j2\n"
@@ -97,10 +99,10 @@ class Repo:
                 "files: []\n"
             )
 
-        base_vars = path / "base" / "vars" / "base.yaml"
-        if not base_vars.exists():
-            base_vars.write_text(
-                "# Shared template variables (available in all profiles)\n"
+        vars_file = path / "vars.yaml"
+        if not vars_file.exists():
+            vars_file.write_text(
+                "# Template variables for .j2 files (profile branches can override them)\n"
                 "# hostname: my-machine\n"
                 "# email: you@example.com\n"
             )
@@ -136,28 +138,26 @@ class Repo:
         branch = f"profiles/{profile}"
         if self.branch_exists(branch):
             raise GitError(f"Branch {branch!r} already exists.")
-        # ensure we're on base first
         self.checkout("base")
         self.checkout(branch, create=True)
 
-        # Scaffold profile-specific dirs
-        profile_dir = self.path / "profiles" / profile
-        (profile_dir / "files").mkdir(parents=True, exist_ok=True)
-        (profile_dir / "vars").mkdir(parents=True, exist_ok=True)
-
-        vars_file = profile_dir / "vars" / f"{profile}.yaml"
-        if not vars_file.exists():
-            vars_file.write_text(f"# Variable overrides for profile: {profile}\n")
-
-        self._run("add", "-A")
-        self._run("commit", "-m", f"init: scaffold profile {profile!r}")
-
-    def merge_base(self) -> None:
-        """Merge base into the current profile branch."""
+    def merge_base(self) -> bool:
+        """Merge base (local and origin) into the current branch. True if anything merged."""
         current = self.current_branch()
         if current == "base":
             raise GitError("Already on base branch — nothing to merge.")
-        self._run("merge", "base", "--no-edit")
+        before = self._run("rev-parse", "HEAD").stdout.strip()
+        for ref in ("origin/base", "base"):
+            if self._run("rev-parse", "--verify", "--quiet", ref, check=False).returncode != 0:
+                continue
+            result = self._run("merge", ref, "--no-edit", check=False)
+            if result.returncode != 0:
+                self._run("merge", "--abort", check=False)
+                raise GitError(
+                    f"Merging {ref} into {current} conflicts; resolve it by hand in {self.path} "
+                    f"(git merge {ref})"
+                )
+        return self._run("rev-parse", "HEAD").stdout.strip() != before
 
     # ── Remote sync ────────────────────────────────────────────────────────────
 

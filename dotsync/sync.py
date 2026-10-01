@@ -18,6 +18,7 @@ Conflict resolution modes:
 
 from __future__ import annotations
 
+import glob
 import os
 import re
 import shutil
@@ -59,7 +60,7 @@ class Syncer:
         self.config = config
         self.dry_run = dry_run
         self.repo = Repo(config.repo_path)
-        self.renderer = Renderer(config.repo_path, config.profile)
+        self.renderer = Renderer(config.repo_path)
         self.state = State.load(config.state_path, config.profile, config.conflict_resolution)
         self.include_binary = config.include_binary
 
@@ -117,16 +118,55 @@ class Syncer:
         finally:
             self.dry_run = old_dry
 
-    def add(self, local: Path, remote: str | None = None) -> FileResult:
+    def add(self, locals_: list[Path], remote: str | None = None) -> list[FileResult]:
         """
-        Start tracking a local file or directory.
+        Start tracking one or more local files or directories.
 
-        Copies `local` into base/files/<remote> (remote defaults to the
-        basename, i.e. the root of base/files), appends a manifest entry,
-        records state, then commits and pushes.
+        Each path is copied into files/<remote> (remote defaults to the
+        basename, i.e. the root of files/), gets a manifest entry and
+        state, then everything is committed and pushed in a single commit.
+        With several paths, `remote` is always treated as a directory.
+
+        Paths that can't be added (missing, already tracked, binary, …) are
+        returned with `error` set; the rest are still added.
         """
         branch = self.config.branch
-        dest = local.expanduser().absolute()
+        as_dir = len(locals_) > 1
+        manifest = self.renderer.load_manifest()
+
+        results: list[FileResult] = []
+        planned: list[tuple[str, Path]] = []
+        for local in locals_:
+            dest = local.expanduser().absolute()
+            try:
+                source = self._plan_add(dest, remote, as_dir, manifest, planned)
+            except ValueError as e:
+                results.append(FileResult(dest=dest, source="", action=Action.PUSH, error=str(e)))
+                continue
+            planned.append((source, dest))
+            results.append(FileResult(dest=dest, source=source, action=Action.PUSH))
+
+        if self.dry_run or not planned:
+            return results
+
+        self.repo.checkout(branch)
+        added = []
+        for i, r in enumerate(results):
+            if r.error:
+                continue
+            results[i] = r = self._push_file(r.source, r.dest)
+            if not r.error:
+                self._append_manifest_entry(r.source, r.dest)
+                added.append(r.source)
+        if added:
+            message = f"add: {added[0]}" if len(added) == 1 else f"add: {len(added)} files\n\n" + "\n".join(added)
+            self._git_commit_and_push(branch, message=message)
+            self.state.save()
+        return results
+
+    def _plan_add(self, dest: Path, remote: str | None, as_dir: bool,
+                  manifest: list[dict], planned: list[tuple[str, Path]]) -> str:
+        """Validate adding `dest` and return its repo source path, or raise ValueError."""
         if not dest.exists():
             raise ValueError(f"Local path not found: {dest}")
         if dest.is_symlink():
@@ -137,43 +177,143 @@ class Syncer:
                 "(set include_binary: true in config to allow binaries)"
             )
 
-        files_root = self.config.repo_path / "base" / "files"
+        files_root = self.config.repo_path / "files"
         rel = remote.strip("/") if remote else ""
-        if not rel or remote.endswith("/") or (files_root / rel).is_dir():
+        if not rel or as_dir or remote.endswith("/") or (files_root / rel).is_dir():
             rel = f"{rel}/{dest.name}".lstrip("/")
         repo_source = (files_root / rel).resolve()
         if not repo_source.is_relative_to(files_root.resolve()):
-            raise ValueError(f"Remote path escapes base/files: {remote}")
-        source = f"base/files/{repo_source.relative_to(files_root.resolve())}"
+            raise ValueError(f"Remote path escapes files/: {remote}")
+        source = f"files/{repo_source.relative_to(files_root.resolve())}"
 
-        manifest = self.renderer.load_manifest()
         for entry in manifest:
             if Path(entry["dest"]) == dest:
                 raise ValueError(f"{dest} is already tracked (source: {entry['source']})")
             if entry["source"] == source:
                 raise ValueError(f"{source} is already used by {entry['dest']}")
+        for other_source, other_dest in planned:
+            if other_dest == dest:
+                raise ValueError(f"{dest} was given more than once")
+            if other_source == source:
+                raise ValueError(f"{source} would also be used by {other_dest}; use --remote to separate them")
         if repo_source.exists():
             raise ValueError(f"{source} already exists in the repo")
+        return source
 
-        if self.dry_run:
-            return FileResult(dest=dest, source=source, action=Action.PUSH)
+    def checkout(self, patterns: list[str], local: Path | None = None,
+                 force: bool = False) -> list[FileResult]:
+        """
+        Start tracking files that already exist in the repo (the reverse of add).
+
+        Each pattern is a path or glob relative to files/. The file is
+        written to `local` (default: ~/<path>, minus any .j2 suffix), gets a
+        manifest entry and state, then the manifest change is committed and
+        pushed. With several files, `local` is always treated as a directory.
+        An existing local file with different content is only overwritten
+        when `force` is set.
+        """
+        branch = self.config.branch
+        self._git_pull(branch)
+        sources = self._expand_sources(patterns)
+        as_dir = len(sources) > 1
+        manifest = self.renderer.load_manifest()
+
+        results: list[FileResult] = []
+        planned: list[tuple[str, Path]] = []
+        for source in sources:
+            try:
+                dest = self._plan_checkout(source, local, as_dir, force, manifest, planned)
+            except (ValueError, RenderError) as e:
+                results.append(FileResult(dest=local or Path(source), source=source,
+                                          action=Action.PULL, error=str(e)))
+                continue
+            planned.append((source, dest))
+            results.append(FileResult(dest=dest, source=source, action=Action.PULL))
+
+        if self.dry_run or not planned:
+            return results
 
         self.repo.checkout(branch)
-        result = self._push_file(source, dest)
-        if result.error:
-            return result
-        self._append_manifest_entry(source, dest)
-        self._git_commit_and_push(branch, message=f"add: {source}")
-        self.state.save()
-        return result
+        added = []
+        for i, r in enumerate(results):
+            if r.error:
+                continue
+            results[i] = r = self._pull_file(r.source, r.dest)
+            if not r.error:
+                self._append_manifest_entry(r.source, r.dest)
+                added.append(r.source)
+        if added:
+            message = (f"checkout: {added[0]}" if len(added) == 1
+                       else f"checkout: {len(added)} files\n\n" + "\n".join(added))
+            self._git_commit_and_push(branch, message=message)
+            self.state.save()
+        return results
+
+    def _expand_sources(self, patterns: list[str]) -> list[str]:
+        """Expand repo paths/globs (relative to files/) into manifest sources."""
+        files_root = (self.config.repo_path / "files").resolve()
+        sources: dict[str, None] = {}
+        for pattern in patterns:
+            rel = pattern.strip("/").removeprefix("files/")
+            if glob.has_magic(rel):
+                matches = {Path(m).relative_to(files_root).as_posix()
+                           for m in glob.glob(str(files_root / rel), include_hidden=True)}
+                if not matches:
+                    raise ValueError(f"Nothing in the repo matches {pattern}")
+            else:
+                matches = {rel}
+            for m in sorted(matches):
+                if not (files_root / m).resolve().is_relative_to(files_root):
+                    raise ValueError(f"Repo path escapes files/: {pattern}")
+                sources.setdefault(f"files/{m}", None)
+        return list(sources)
+
+    def _plan_checkout(self, source: str, local: Path | None, as_dir: bool, force: bool,
+                       manifest: list[dict], planned: list[tuple[str, Path]]) -> Path:
+        """Validate checking out `source` and return its disk path, or raise."""
+        abs_source = self.renderer.resolve_source(source)
+        if abs_source.is_file() and not self.include_binary and is_binary(abs_source):
+            raise ValueError(
+                f"{source} is a binary file; only text files are synced "
+                "(set include_binary: true in config to allow binaries)"
+            )
+
+        name = source.removeprefix("files/").removesuffix(".j2")
+        if local is None:
+            dest = Path.home() / name
+        else:
+            dest = Path(os.path.abspath(local.expanduser()))
+            if as_dir or str(local).endswith("/") or dest.is_dir() and not abs_source.is_dir():
+                dest = dest / Path(name).name
+
+        for entry in manifest:
+            if entry["source"] == source:
+                raise ValueError(f"{source} is already tracked (dest: {entry['dest']})")
+            if Path(entry["dest"]) == dest:
+                raise ValueError(f"{dest} is already tracked (source: {entry['source']})")
+        for other_source, other_dest in planned:
+            if other_dest == dest:
+                raise ValueError(f"{dest} would also be written by {other_source}")
+
+        if dest.is_symlink():
+            raise ValueError(f"{dest} is a symlink; symlinks are not tracked")
+        if dest.exists() and not force:
+            if abs_source.is_dir() != dest.is_dir():
+                raise ValueError(f"{dest} already exists and is a different kind of path (use --force)")
+            if abs_source.is_dir():
+                same = sha256_dir(abs_source, self.include_binary) == sha256_dir(dest, self.include_binary)
+            else:
+                same = self.renderer.render(source) == dest.read_bytes()
+            if not same:
+                raise ValueError(f"{dest} already exists with different content (use --force to overwrite)")
+        return dest
 
     def remove(self, local: Path) -> FileResult:
         """
         Stop tracking a file or directory.
 
-        Drops its manifest entry, deletes its source from the repo (base and
-        the active profile's override), forgets its state, then commits and
-        pushes. The file on disk is left untouched.
+        Drops its manifest entry, deletes its source from the repo, forgets
+        its state, then commits and pushes. The file on disk is left untouched.
         """
         branch = self.config.branch
         dest = Path(os.path.abspath(local.expanduser()))
@@ -201,15 +341,11 @@ class Syncer:
 
         # Keep the source if another (hand-written) entry still points at it
         if not any(e["source"] == source for e in manifest if e is not entry):
-            repo_paths = [self.config.repo_path / source]
-            if source.startswith("base/files/"):
-                repo_paths.append(self.config.repo_path / "profiles" / self.config.profile
-                                  / "files" / source[len("base/files/"):])
-            for p in repo_paths:
-                if p.is_dir() and not p.is_symlink():
-                    shutil.rmtree(p)
-                elif p.exists() or p.is_symlink():
-                    p.unlink()
+            p = self.config.repo_path / source
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            elif p.exists() or p.is_symlink():
+                p.unlink()
 
         self.state.forget(result.dest)
         self._git_commit_and_push(branch, message=f"remove: {source}")
@@ -448,13 +584,21 @@ class Syncer:
     # ── Git helpers ────────────────────────────────────────────────────────────
 
     def _git_pull(self, branch: str) -> None:
+        """Pull the profile branch, then merge base into it so shared changes reach every profile."""
         try:
+            self.repo.checkout(branch)
             if self.repo.remote_ahead(branch):
-                self.repo.checkout(branch)
                 self.repo.pull(branch)
         except GitError as e:
             # Non-fatal: offline sync still works
             print(f"  [warn] Could not pull from remote: {e}")
+        if branch == "base":
+            return
+        try:
+            if self.repo.merge_base() and self.config.auto_push and not self.dry_run:
+                self.repo.push(branch)
+        except GitError as e:
+            print(f"  [warn] Could not merge base into {branch}: {e}")
 
     def _git_commit_and_push(self, branch: str, message: str | None = None) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

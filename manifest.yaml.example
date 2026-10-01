@@ -2,50 +2,47 @@
 # Maps repo source files → system destinations.
 #
 # Source paths are relative to the repo root.
-# Files ending in .j2 are rendered as Jinja2 templates using vars from:
-#   base/vars/base.yaml          (shared)
-#   profiles/<name>/vars/<name>.yaml  (profile overrides)
+# Files ending in .j2 are rendered as Jinja2 templates using vars.yaml.
 #
-# Profile-specific file overrides: place a file with the same name under
-#   profiles/<name>/files/<filename>
-# and it will be used instead of base/files/<filename> for that profile.
+# Profiles are branches: to change a file or variable for one profile, edit
+# it on that profile's branch. Changes on base are merged in on every sync.
 
 files:
   # ── Shell ──────────────────────────────────────────────────────────────────
-  - source: base/files/dot_zshrc.j2
+  - source: files/dot_zshrc.j2
     dest: ~/.zshrc
 
-  - source: base/files/dot_bashrc.j2
+  - source: files/dot_bashrc.j2
     dest: ~/.bashrc
 
   # ── Git ────────────────────────────────────────────────────────────────────
-  - source: base/files/dot_gitconfig.j2
+  - source: files/dot_gitconfig.j2
     dest: ~/.gitconfig
 
   # ── Editors ────────────────────────────────────────────────────────────────
-  - source: base/files/dot_vimrc
+  - source: files/dot_vimrc
     dest: ~/.vimrc
 
-  - source: base/files/nvim
+  - source: files/nvim
     dest: ~/.config/nvim
 
   # ── Terminal ───────────────────────────────────────────────────────────────
-  - source: base/files/dot_tmux.conf
+  - source: files/dot_tmux.conf
     dest: ~/.tmux.conf
 
-  - source: base/files/alacritty
+  - source: files/alacritty
     dest: ~/.config/alacritty
 
   # ── Desktop / WM ───────────────────────────────────────────────────────────
-  - source: base/files/hypr
+  - source: files/hypr
     dest: ~/.config/hypr
 
-  - source: base/files/sway
+  - source: files/sway
     dest: ~/.config/sway
 
   # ── Tools ──────────────────────────────────────────────────────────────────
-  - source: base/files/starship.toml.j2
+  - source: files/starship.toml.j2
     dest: ~/.config/starship.toml
 
-  - source: base/files/thinkfan.yaml
+  - source: files/thinkfan.yaml
     dest: ~/.config/thinkfan.yaml

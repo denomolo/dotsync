@@ -1,12 +1,10 @@
 """
-renderer.py — Jinja2 template rendering with profile variable merging.
+renderer.py — Jinja2 template rendering.
 
-Variable loading order (later overrides earlier):
-  1. base/vars/base.yaml          ← shared across all profiles
-  2. profiles/<n>/vars/<n>.yaml   ← profile-specific overrides
-
-Templates (.j2 files) are rendered with the merged variable set.
-Plain files are returned as-is (no rendering).
+Templates (.j2 files) are rendered with the variables in vars.yaml at the
+repo root. Plain files are returned as-is (no rendering). Profiles are
+branches, so a profile overrides a file or variable by editing it on its
+own branch.
 """
 
 from __future__ import annotations
@@ -23,18 +21,12 @@ class RenderError(Exception):
 
 
 class Renderer:
-    def __init__(self, repo_path: Path, profile: str):
+    def __init__(self, repo_path: Path):
         self.repo_path = repo_path
-        self.profile = profile
         self._vars: dict[str, Any] | None = None
 
-        # Jinja2 env — searches both base/files and profiles/<n>/files
-        search_paths = [
-            str(repo_path / "base" / "files"),
-            str(repo_path / "profiles" / profile / "files"),
-        ]
         self.env = Environment(
-            loader=FileSystemLoader(search_paths),
+            loader=FileSystemLoader(str(repo_path / "files")),
             undefined=StrictUndefined,       # error on missing variables
             keep_trailing_newline=True,
         )
@@ -50,11 +42,7 @@ class Renderer:
     @property
     def vars(self) -> dict[str, Any]:
         if self._vars is None:
-            base_vars = self._load_yaml(self.repo_path / "base" / "vars" / "base.yaml")
-            profile_vars = self._load_yaml(
-                self.repo_path / "profiles" / self.profile / "vars" / f"{self.profile}.yaml"
-            )
-            self._vars = {**base_vars, **profile_vars}
+            self._vars = self._load_yaml(self.repo_path / "vars.yaml")
         return self._vars
 
     # ── Rendering ─────────────────────────────────────────────────────────────
@@ -66,13 +54,7 @@ class Renderer:
         - If the file ends in .j2, renders as a Jinja2 template.
         - Otherwise, returns raw bytes.
         - Directories can't be rendered; use resolve_source() and copy them.
-
-        Profile files take precedence over base files for templates
-        (Jinja2 FileSystemLoader searches in order: base, then profile —
-        but we reverse so profile wins by putting it last and using
-        select_template logic below).
         """
-        # Resolve absolute path: profile overrides base
         abs_path = self.resolve_source(source_rel)
 
         if abs_path.is_dir():
@@ -83,26 +65,10 @@ class Renderer:
             return abs_path.read_bytes()
 
     def resolve_source(self, source_rel: str) -> Path:
-        """
-        Find the actual file on disk, preferring profile over base.
-        source_rel is relative to the repo root.
-        """
-        # Try profile-specific path first
-        # e.g. "base/files/dot_zshrc.j2" → check "profiles/<n>/files/dot_zshrc.j2"
-        candidates = []
-
-        if source_rel.startswith("base/files/"):
-            filename = source_rel[len("base/files/"):]
-            profile_path = self.repo_path / "profiles" / self.profile / "files" / filename
-            if profile_path.exists():
-                candidates.append(profile_path)
-
-        candidates.append(self.repo_path / source_rel)
-
-        for c in candidates:
-            if c.exists():
-                return c
-
+        """Find the source on disk. source_rel is relative to the repo root."""
+        path = self.repo_path / source_rel
+        if path.exists():
+            return path
         raise RenderError(f"Source file not found: {source_rel}")
 
     def _render_template(self, abs_path: Path) -> bytes:
@@ -123,7 +89,7 @@ class Renderer:
         Load and return the list of file mappings from manifest.yaml.
 
         Each entry has:
-          source: relative path in repo (e.g. "base/files/dot_zshrc.j2")
+          source: relative path in repo (e.g. "files/dot_zshrc.j2")
           dest:   absolute destination path (e.g. "~/.zshrc")
         """
         manifest_path = self.repo_path / "manifest.yaml"
