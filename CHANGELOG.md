@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-01
 
 ### Changed
 - `dotsync add` without `--remote` keeps the path's hierarchy relative to
