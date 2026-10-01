@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-30
 
 ### Added
 - `dotsync add` accepts several paths and glob patterns (quoted patterns
