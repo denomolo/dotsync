@@ -67,7 +67,7 @@ class Syncer:
 
     def sync(self) -> list[FileResult]:
         """Full bidirectional sync: fetch → decide → act → commit → push."""
-        branch = f"profiles/{self.config.profile}"
+        branch = self.config.branch
 
         # 1. Pull remote changes into the repo
         self._git_pull(branch)
@@ -89,7 +89,7 @@ class Syncer:
 
     def push_all(self) -> list[FileResult]:
         """Force disk → repo for all files (machine-wins override)."""
-        branch = f"profiles/{self.config.profile}"
+        branch = self.config.branch
         manifest = self.renderer.load_manifest()
         results = [self._push_file(entry["source"], Path(entry["dest"])) for entry in manifest]
         if not self.dry_run:
@@ -99,7 +99,7 @@ class Syncer:
 
     def pull_all(self) -> list[FileResult]:
         """Force repo → disk for all files (git-wins override)."""
-        branch = f"profiles/{self.config.profile}"
+        branch = self.config.branch
         self._git_pull(branch)
         manifest = self.renderer.load_manifest()
         results = [self._pull_file(entry["source"], Path(entry["dest"])) for entry in manifest]
@@ -125,7 +125,7 @@ class Syncer:
         basename, i.e. the root of base/files), appends a manifest entry,
         records state, then commits and pushes.
         """
-        branch = f"profiles/{self.config.profile}"
+        branch = self.config.branch
         dest = local.expanduser().absolute()
         if not dest.exists():
             raise ValueError(f"Local path not found: {dest}")
@@ -175,7 +175,7 @@ class Syncer:
         the active profile's override), forgets its state, then commits and
         pushes. The file on disk is left untouched.
         """
-        branch = f"profiles/{self.config.profile}"
+        branch = self.config.branch
         dest = Path(os.path.abspath(local.expanduser()))
 
         manifest = self.renderer.load_manifest()

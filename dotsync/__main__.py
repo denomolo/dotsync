@@ -25,7 +25,7 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .config import Config, CONFIG_PATH
+from .config import Config, CONFIG_PATH, profile_branch
 from .repo import Repo, GitError, normalize_github_url
 from .sync import Action, Syncer
 from . import systemd
@@ -276,7 +276,7 @@ def profile_list():
 def profile_set(name: str):
     """Switch the active profile."""
     cfg = load_config_or_exit()
-    branch = f"profiles/{name}"
+    branch = profile_branch(name)
     repo = Repo(cfg.repo_path)
 
     if not repo.branch_exists(branch) and not repo.branch_exists(branch, remote=True):

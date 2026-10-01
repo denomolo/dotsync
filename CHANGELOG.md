@@ -4,6 +4,14 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+- The `base` profile now uses the `base` branch instead of a nonexistent
+  `profiles/base`. Previously `dotsync add` failed with "pathspec
+  'profiles/base' did not match", and `sync`/`push` skipped committing
+  with only a warning.
+
 ## [0.1.0] - 2026-09-30
 
 First versioned (pre-stable) release.

@@ -16,6 +16,11 @@ CONFIG_PATH = Path(os.environ.get("DOTSYNC_CONFIG", "~/.config/dotsync/config.ya
 ConflictResolution = Literal["last-write-wins", "machine-wins", "git-wins"]
 
 
+def profile_branch(profile: str) -> str:
+    """Git branch for a profile: "base" lives on the base branch itself."""
+    return "base" if profile == "base" else f"profiles/{profile}"
+
+
 @dataclass
 class Config:
     repo_url: str
@@ -25,6 +30,10 @@ class Config:
     include_binary: bool = False   # sync binary files too (default: text only)
     repo_path: Path = field(default_factory=lambda: Path("~/.local/share/dotsync/repo").expanduser())
     state_path: Path = field(default_factory=lambda: Path("~/.local/state/dotsync/state.json").expanduser())
+
+    @property
+    def branch(self) -> str:
+        return profile_branch(self.profile)
 
     @classmethod
     def load(cls) -> "Config":
