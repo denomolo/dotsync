@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.1.1] - 2026-09-30
 
 ### Fixed
 - The `base` profile now uses the `base` branch instead of a nonexistent
