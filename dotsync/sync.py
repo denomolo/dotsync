@@ -123,7 +123,7 @@ class Syncer:
         Start tracking one or more local files or directories.
 
         Each path is copied into files/<remote> (remote defaults to the
-        basename, i.e. the root of files/), gets a manifest entry and
+        path relative to ~, e.g. ~/.config/foo → files/.config/foo), gets a manifest entry and
         state, then everything is committed and pushed in a single commit.
         With several paths, `remote` is always treated as a directory.
 
@@ -178,9 +178,15 @@ class Syncer:
             )
 
         files_root = self.config.repo_path / "files"
-        rel = remote.strip("/") if remote else ""
-        if not rel or as_dir or remote.endswith("/") or (files_root / rel).is_dir():
-            rel = f"{rel}/{dest.name}".lstrip("/")
+        if remote is None:
+            # Mirror the path under ~ so checkout's default (~/<remote>) maps it back
+            if not dest.is_relative_to(Path.home()) or dest == Path.home():
+                raise ValueError(f"{dest} is outside your home directory; use --remote to place it")
+            rel = dest.relative_to(Path.home()).as_posix()
+        else:
+            rel = remote.strip("/")
+            if not rel or as_dir or remote.endswith("/") or (files_root / rel).is_dir():
+                rel = f"{rel}/{dest.name}".lstrip("/")
         repo_source = (files_root / rel).resolve()
         if not repo_source.is_relative_to(files_root.resolve()):
             raise ValueError(f"Remote path escapes files/: {remote}")

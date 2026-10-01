@@ -4,6 +4,15 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Changed
+- `dotsync add` without `--remote` keeps the path's hierarchy relative to
+  your home directory: `~/.config/environment.d` is stored as
+  `files/.config/environment.d` instead of `files/environment.d`, so a
+  plain `dotsync checkout .config/environment.d` maps it back. Paths outside
+  `~` now need `--remote`. Existing manifest entries are unaffected.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

@@ -210,9 +210,10 @@ def add(paths: tuple[str, ...], remote: str | None, dry_run: bool):
     Everything is added in a single commit; paths that can't be added are
     reported and the rest are still added.
 
-    --remote defaults to the root of files/ (keeping each path's name). If
-    it ends with /, is an existing directory, or several paths are given,
-    each path's name is kept inside it. Directories are copied verbatim
+    --remote defaults to the path relative to your home directory, so
+    ~/.config/foo is stored as files/.config/foo (paths outside ~ need
+    --remote). If --remote ends with /, is an existing directory, or several
+    paths are given, each path's name is kept inside it. Directories are copied verbatim
     (no .j2 rendering).
 
     Symlinks are never copied: PATHS themselves can't be symlinks, and
