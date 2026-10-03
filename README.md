@@ -96,7 +96,7 @@ This repository is private, so you need collaborator access. Install a
 tagged release straight from GitHub:
 
 ```sh
-pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.4.2
+pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.4.3
 dotsync --version
 ```
 
@@ -312,7 +312,13 @@ editor: nvim
 ```
 
 Profiles override variables by editing `vars.yaml` on their branch.
-Directories are always copied verbatim, never rendered. See
+Directories are always copied verbatim, never rendered.
+
+Templated files only flow **repo → disk**. If you edit the rendered file on
+disk (e.g. `~/.gitconfig`), `sync` and `push` report an error instead of
+copying it over the template, and leave both sides alone. Make the change in
+the `.j2` file in the repo, or run `dotsync pull <path>` to discard the
+local edit. See
 [`dot_gitconfig.j2.example`](dot_gitconfig.j2.example).
 
 ## Conflicts

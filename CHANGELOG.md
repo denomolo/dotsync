@@ -4,6 +4,14 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+- Local edits to a file rendered from a `.j2` template are no longer pushed
+  over the template (which replaced every `{{ variable }}` with its value).
+  `sync` and `push` now report an error and leave both sides untouched; edit
+  the template in the repo, or `dotsync pull` the file to discard the edit.
+
 ## [0.4.2] - 2026-10-03
 
 ### Added

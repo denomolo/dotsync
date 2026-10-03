@@ -160,7 +160,7 @@ class Syncer:
         for i, r in enumerate(results):
             if r.error:
                 continue
-            results[i] = r = self._push_file(r.source, r.dest)
+            results[i] = r = self._push_file(r.source, r.dest, allow_template=True)
             if not r.error:
                 self._append_manifest_entry(r.source, r.dest)
                 added.append(r.source)
@@ -557,13 +557,32 @@ class Syncer:
         self.state.record(dest, rendered)
         return FileResult(dest=dest, source=source, action=Action.PULL)
 
-    def _push_file(self, source: str, dest: Path) -> FileResult:
-        """Copy disk file back into the repo source location."""
+    def _push_file(self, source: str, dest: Path, allow_template: bool = False) -> FileResult:
+        """
+        Copy disk file back into the repo source location.
+
+        A .j2 source is never overwritten (that would replace the template
+        with its rendered output) unless `allow_template` is set, as add does
+        when creating a new source.
+        """
         if not dest.exists():
             return FileResult(dest=dest, source=source, action=Action.PUSH,
                               error=f"Disk file not found: {dest}")
 
         repo_source = self.config.repo_path / source
+        if source.endswith(".j2") and repo_source.is_file() and not allow_template:
+            try:
+                rendered = self.renderer.render(source)
+            except RenderError as e:
+                return FileResult(dest=dest, source=source, action=Action.PUSH, error=str(e))
+            if dest.is_file() and dest.read_bytes() == rendered:
+                return FileResult(dest=dest, source=source, action=Action.NOTHING)
+            shown = str(dest).replace(str(Path.home()), "~")
+            return FileResult(
+                dest=dest, source=source, action=Action.PUSH,
+                error=f"rendered from template {source}; edit the template in the repo "
+                      f"instead (`dotsync pull {shown}` discards the local change)",
+            )
         if not dest.is_dir() and self._is_skipped_binary(repo_source, dest):
             return FileResult(dest=dest, source=source, action=Action.NOTHING, skipped="binary")
         if self.dry_run:
