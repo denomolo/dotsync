@@ -201,7 +201,7 @@ other profile is a `profiles/<name>` branch that starts as a copy of `base`
 and adds its own commits on top.
 
 ```mermaid
-%%{init: {"themeVariables": {"background": "transparent", "fontSize": "13px", "commitLabelBackground": "transparent", "commitLabelColor": "#8b949e"}, "gitGraph": {"mainBranchName": "base", "rotateCommitLabel": false, "parallelCommits": false}}}%%
+%%{init: {"gitGraph": {"mainBranchName": "base", "rotateCommitLabel": false, "parallelCommits": false}}}%%
 gitGraph
     commit id: "add .vimrc"
     commit id: "add kitty"
@@ -311,7 +311,7 @@ what was last synced for each file, which is how dotsync tells which side
 changed. Templates (`.j2`) are rendered on the way to disk.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "transparent", "primaryColor": "transparent", "mainBkg": "transparent", "secondaryColor": "transparent", "tertiaryColor": "transparent", "clusterBkg": "transparent", "edgeLabelBackground": "transparent", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
 flowchart LR
     state["state.json<br/>last-synced hashes"]
     disk["Disk<br/>~/.vimrc …"]
@@ -332,7 +332,7 @@ anything in the repo changed (plain pushes or conflicts the disk won), and
 saves the state file.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "transparent", "primaryColor": "transparent", "mainBkg": "transparent", "secondaryColor": "transparent", "tertiaryColor": "transparent", "clusterBkg": "transparent", "edgeLabelBackground": "transparent", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
 flowchart LR
     start(["sync"]) --> pull["git pull<br/>profile branch"]
     pull --> merge["merge base in<br/>(profiles only)"]
@@ -348,7 +348,7 @@ file in the repo (after rendering templates), and the one it recorded the
 last time it synced that file.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "transparent", "primaryColor": "transparent", "mainBkg": "transparent", "secondaryColor": "transparent", "tertiaryColor": "transparent", "clusterBkg": "transparent", "edgeLabelBackground": "transparent", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
 flowchart LR
     f(["file"]) --> known{"synced<br/>before?"}
     known -- no --> ondisk{"on disk?"}
