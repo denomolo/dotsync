@@ -4,6 +4,15 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- `dotsync push` and `dotsync pull` accept paths to act on just those
+  tracked files or directories, e.g. `dotsync push ~/.vimrc`. Quoted globs
+  are matched against tracked paths, so `dotsync pull '~/.config/foo/*'`
+  works even for files missing from disk. Without paths they still act on
+  everything.
+
 ## [0.3.0] - 2026-10-01
 
 ### Changed

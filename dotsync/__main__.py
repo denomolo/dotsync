@@ -4,8 +4,8 @@ dotsync — bidirectional dotfile sync with profiles and templating.
 Usage:
     dotsync install                  First-time setup
     dotsync sync [--dry-run]         Bidirectional sync (default)
-    dotsync push [--dry-run]         Force disk → git
-    dotsync pull [--dry-run]         Force git → disk
+    dotsync push [<path>...]         Force disk → git (all, or just <path>s)
+    dotsync pull [<path>...]         Force git → disk (all, or just <path>s)
     dotsync status                   Show per-file state
     dotsync add <path>...            Track files/dirs, copying them to the repo (--remote R)
     dotsync checkout <remote>...     Track repo files, writing them to disk (--local L)
@@ -159,29 +159,49 @@ def sync(dry_run: bool, verbose: bool):
 # ── push ───────────────────────────────────────────────────────────────────────
 
 @cli.command()
+@click.argument("paths", nargs=-1)
 @click.option("--dry-run", is_flag=True)
 @click.option("-v", "--verbose", is_flag=True)
-def push(dry_run: bool, verbose: bool):
-    """Force disk → git for all files (machine-wins)."""
+def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
+    """Force disk → git for all files, or only PATHS (machine-wins).
+
+    PATHS are tracked files or directories on disk. Quoted glob patterns
+    are matched against tracked paths, so '~/.config/foo/*' works even for
+    files missing from disk.
+    """
     cfg = load_config_or_exit()
     click.echo(f"Pushing disk → repo (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
-    results = syncer.push_all()
-    print_results(results, verbose=verbose)
+    try:
+        results = syncer.push_all(list(paths))
+    except (ValueError, GitError, RenderError) as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
+    print_results(results, verbose=verbose or bool(paths))
 
 
 # ── pull ───────────────────────────────────────────────────────────────────────
 
 @cli.command()
+@click.argument("paths", nargs=-1)
 @click.option("--dry-run", is_flag=True)
 @click.option("-v", "--verbose", is_flag=True)
-def pull(dry_run: bool, verbose: bool):
-    """Force git → disk for all files (git-wins)."""
+def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
+    """Force git → disk for all files, or only PATHS (git-wins).
+
+    PATHS are tracked files or directories on disk. Quoted glob patterns
+    are matched against tracked paths, so '~/.config/foo/*' works even for
+    files missing from disk.
+    """
     cfg = load_config_or_exit()
     click.echo(f"Pulling repo → disk (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
-    results = syncer.pull_all()
-    print_results(results, verbose=verbose)
+    try:
+        results = syncer.pull_all(list(paths))
+    except (ValueError, GitError, RenderError) as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
+    print_results(results, verbose=verbose or bool(paths))
 
 
 # ── status ─────────────────────────────────────────────────────────────────────

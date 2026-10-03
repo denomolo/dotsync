@@ -18,6 +18,7 @@ Conflict resolution modes:
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import os
 import re
@@ -88,21 +89,26 @@ class Syncer:
 
         return results
 
-    def push_all(self) -> list[FileResult]:
-        """Force disk → repo for all files (machine-wins override)."""
+    def push_all(self, patterns: list[str] | None = None) -> list[FileResult]:
+        """Force disk → repo for all files, or only those matching `patterns` (machine-wins)."""
         branch = self.config.branch
-        manifest = self.renderer.load_manifest()
+        manifest = self._select_entries(self.renderer.load_manifest(), patterns)
         results = [self._push_file(entry["source"], Path(entry["dest"])) for entry in manifest]
         if not self.dry_run:
-            self._git_commit_and_push(branch)
+            message = None
+            if patterns:
+                pushed = [r.source for r in results if not r.error and not r.skipped]
+                message = (f"push: {pushed[0]}" if len(pushed) == 1
+                           else f"push: {len(pushed)} files\n\n" + "\n".join(pushed))
+            self._git_commit_and_push(branch, message=message)
             self.state.save()
         return results
 
-    def pull_all(self) -> list[FileResult]:
-        """Force repo → disk for all files (git-wins override)."""
+    def pull_all(self, patterns: list[str] | None = None) -> list[FileResult]:
+        """Force repo → disk for all files, or only those matching `patterns` (git-wins)."""
         branch = self.config.branch
         self._git_pull(branch)
-        manifest = self.renderer.load_manifest()
+        manifest = self._select_entries(self.renderer.load_manifest(), patterns)
         results = [self._pull_file(entry["source"], Path(entry["dest"])) for entry in manifest]
         if not self.dry_run:
             self.state.save()
@@ -313,6 +319,34 @@ class Syncer:
             if not same:
                 raise ValueError(f"{dest} already exists with different content (use --force to overwrite)")
         return dest
+
+    def _select_entries(self, manifest: list[dict], patterns: list[str] | None) -> list[dict]:
+        """
+        Manifest entries whose dest matches one of `patterns` (all if none given).
+
+        Patterns are disk paths; globs are matched against tracked dests, not
+        the filesystem, so files missing from disk can still be selected.
+        Raises ValueError if any pattern matches no tracked entry.
+        """
+        if not patterns:
+            return manifest
+        selected: dict[int, dict] = {}
+        for pattern in patterns:
+            path = os.path.abspath(os.path.expanduser(pattern))
+            if glob.has_magic(path):
+                matches = [i for i, e in enumerate(manifest)
+                           if fnmatch.fnmatchcase(os.path.abspath(e["dest"]), path)]
+            else:
+                matches = [i for i, e in enumerate(manifest) if os.path.abspath(e["dest"]) == path]
+            if not matches:
+                parent = next((e for e in manifest if Path(path).is_relative_to(e["dest"])), None)
+                if parent:
+                    raise ValueError(f"{path} is inside tracked directory {parent['dest']}; "
+                                     "use that directory instead")
+                raise ValueError(f"{pattern} is not tracked")
+            for i in matches:
+                selected.setdefault(i, manifest[i])
+        return [selected[i] for i in sorted(selected)]
 
     def remove(self, local: Path) -> FileResult:
         """
