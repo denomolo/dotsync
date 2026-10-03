@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.4.3] - 2026-10-03
 
 ### Fixed
 - Local edits to a file rendered from a `.j2` template are no longer pushed
