@@ -46,7 +46,8 @@ ACTION_SYMBOLS = {
 }
 
 
-def print_results(results, verbose: bool = False) -> None:
+def print_results(results, verbose: bool = False, pending: bool = False) -> None:
+    """Print per-file results and a summary; pending=True words it as not yet done."""
     errors = 0
     for r in results:
         sym = ACTION_SYMBOLS[r.action]
@@ -67,13 +68,13 @@ def print_results(results, verbose: bool = False) -> None:
     skipped = sum(1 for r in results if r.skipped)
     parts = []
     if counts[Action.PULL]:
-        parts.append(click.style(f"↓ {counts[Action.PULL]} pulled", fg="cyan"))
+        parts.append(click.style(f"↓ {counts[Action.PULL]} " + ("to pull" if pending else "pulled"), fg="cyan"))
     if counts[Action.PUSH]:
-        parts.append(click.style(f"↑ {counts[Action.PUSH]} pushed", fg="green"))
+        parts.append(click.style(f"↑ {counts[Action.PUSH]} " + ("to push" if pending else "pushed"), fg="green"))
     if counts[Action.CONFLICT]:
         parts.append(click.style(f"! {counts[Action.CONFLICT]} conflicts", fg="yellow"))
     if counts[Action.UNTRACK]:
-        parts.append(click.style(f"− {counts[Action.UNTRACK]} untracked", fg="red"))
+        parts.append(click.style(f"− {counts[Action.UNTRACK]} " + ("to untrack" if pending else "untracked"), fg="red"))
     if counts[Action.NOTHING] and not parts:
         parts.append(click.style("already in sync", fg="bright_black"))
     if skipped:
@@ -153,7 +154,7 @@ def sync(dry_run: bool, verbose: bool):
     click.echo(f"{label}Syncing profile {click.style(cfg.profile, fg='cyan')} …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
     results = syncer.sync()
-    print_results(results, verbose=verbose)
+    print_results(results, verbose=verbose, pending=dry_run)
 
 
 # ── push ───────────────────────────────────────────────────────────────────────
@@ -177,7 +178,7 @@ def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=verbose or bool(paths))
+    print_results(results, verbose=verbose or bool(paths), pending=dry_run)
 
 
 # ── pull ───────────────────────────────────────────────────────────────────────
@@ -201,7 +202,7 @@ def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=verbose or bool(paths))
+    print_results(results, verbose=verbose or bool(paths), pending=dry_run)
 
 
 # ── status ─────────────────────────────────────────────────────────────────────
@@ -213,7 +214,7 @@ def status():
     click.echo(f"Status (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=True)
     results = syncer.status()
-    print_results(results, verbose=True)
+    print_results(results, verbose=True, pending=True)
 
 
 # ── add ────────────────────────────────────────────────────────────────────────
@@ -253,7 +254,7 @@ def add(paths: tuple[str, ...], remote: str | None, dry_run: bool):
     except (ValueError, GitError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=True)
+    print_results(results, verbose=True, pending=dry_run)
     for r in results:
         if not r.error:
             dest = str(r.dest).replace(str(Path.home()), "~")
@@ -305,7 +306,7 @@ def checkout(remotes: tuple[str, ...], local: Path | None, force: bool, dry_run:
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=True)
+    print_results(results, verbose=True, pending=dry_run)
     for r in results:
         if not r.error and not r.skipped:
             dest = str(r.dest).replace(str(Path.home()), "~")
@@ -333,7 +334,7 @@ def remove(local: Path, dry_run: bool):
     except (ValueError, GitError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results([result], verbose=True)
+    print_results([result], verbose=True, pending=dry_run)
     verb = "Would stop tracking" if dry_run else "No longer tracking"
     click.echo(f"  {verb} {click.style(result.source, fg='cyan')} (disk copy kept)")
 

@@ -4,6 +4,12 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+- `dotsync status` and `--dry-run` summaries say what would happen
+  ("↑ 1 to push") instead of reporting it as done ("↑ 1 pushed").
+
 ## [0.4.0] - 2026-10-03
 
 ### Added
