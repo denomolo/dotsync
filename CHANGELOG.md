@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.4.1] - 2026-10-03
 
 ### Fixed
 - `dotsync status` and `--dry-run` summaries say what would happen
