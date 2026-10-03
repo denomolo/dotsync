@@ -187,6 +187,16 @@ class Repo:
         result = self._run("status", "--porcelain")
         return bool(result.stdout.strip())
 
+    def last_commit_time(self, path: str) -> float | None:
+        """
+        Unix time of the last commit touching `path` (file or directory), or
+        None if it has uncommitted changes or was never committed.
+        """
+        if self._run("status", "--porcelain", "--", path).stdout.strip():
+            return None
+        out = self._run("log", "-1", "--format=%ct", "--", path, check=False).stdout.strip()
+        return float(out) if out else None
+
     # ── Diff / status ──────────────────────────────────────────────────────────
 
     def status(self) -> str:

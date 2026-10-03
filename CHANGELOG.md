@@ -4,6 +4,21 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- README with install instructions, a command reference and flowcharts of
+  how sync works.
+
+### Fixed
+- `last-write-wins` no longer always picks the repo when both sides
+  changed. It compared against the clone's file mtime, which `git pull`
+  resets at the start of every sync, so local edits were overwritten. It
+  now uses the time of the last commit that changed the file.
+- Conflicts won by the machine during `sync` are now committed and pushed;
+  before, they stayed uncommitted in the local clone until an unrelated
+  push.
+
 ## [0.4.1] - 2026-10-03
 
 ### Fixed

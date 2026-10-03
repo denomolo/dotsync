@@ -78,9 +78,9 @@ class Syncer:
         manifest = self.renderer.load_manifest()
         results = [self._process_entry(entry) for entry in manifest]
 
-        # 3. Commit any files that were pushed (disk → repo)
-        pushed = [r for r in results if r.action == Action.PUSH and not r.error]
-        if pushed and not self.dry_run:
+        # 3. Commit whatever changed in the repo: pushes, and conflicts the
+        #    machine won (those are reported as CONFLICT, not PUSH)
+        if not self.dry_run and self.repo.has_uncommitted():
             self._git_commit_and_push(branch)
 
         # 4. Save updated state
@@ -602,10 +602,14 @@ class Syncer:
             result.resolved_by = "git-wins"
             return result
 
-        # last-write-wins: compare disk mtime vs repo file mtime
+        # last-write-wins: compare disk mtime vs when the repo side was
+        # committed. The clone's own mtime is useless: git rewrites the file
+        # when it pulls, so it would always look newer than a local edit.
         repo_source = self.config.repo_path / source
         disk_mtime = _mtime(dest, self.include_binary)
-        repo_mtime = _mtime(repo_source, self.include_binary)
+        repo_mtime = self.repo.last_commit_time(source)
+        if repo_mtime is None:
+            repo_mtime = _mtime(repo_source, self.include_binary)
 
         if disk_mtime >= repo_mtime:
             result = self._push_file(source, dest)
