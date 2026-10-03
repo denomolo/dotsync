@@ -10,7 +10,6 @@ which side changed and only asks a conflict policy to decide when both did.
 
 ## Contents
 
-- [How it works](#how-it-works)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
@@ -20,69 +19,8 @@ which side changed and only asks a conflict policy to decide when both did.
 - [Conflicts](#conflicts)
 - [Configuration](#configuration)
 - [What is not synced](#what-is-not-synced)
-
-## How it works
-
-Three places are involved:
-
-```mermaid
-flowchart LR
-    disk["Your files on disk<br/>~/.vimrc, ~/.config/…"]
-    clone["Local clone of your dotfiles repo<br/>~/.local/share/dotsync/repo"]
-    gh[("Dotfiles repo on GitHub")]
-    state["State file<br/>~/.local/state/dotsync/state.json<br/>(hash of what was last synced, per file)"]
-
-    disk -- "push / add<br/>(disk → repo)" --> clone
-    clone -- "pull / checkout<br/>(repo → disk, .j2 rendered)" --> disk
-    clone -- "git push" --> gh
-    gh -- "git pull" --> clone
-    state -. "decides which side changed" .- disk
-```
-
-### What `dotsync sync` does
-
-```mermaid
-flowchart TD
-    start(["dotsync sync"]) --> pull["Check out the profile's branch<br/>and git pull it from GitHub"]
-    pull --> isbase{"Profile is base?"}
-    isbase -- no --> merge["Merge base into the profile branch<br/>(push the merge if anything came in)"]
-    isbase -- yes --> each
-    merge --> each["For each file in manifest.yaml"]
-    each --> decide["Compare disk, repo and last-synced hash<br/>(see next chart)"]
-    decide --> act["Push, pull, resolve a conflict,<br/>or do nothing"]
-    act --> more{"More files?"}
-    more -- yes --> each
-    more -- no --> pushed{"Repo changed?<br/>(pushes, or conflicts<br/>won by disk)"}
-    pushed -- yes --> commit["git commit + git push"]
-    pushed -- no --> save
-    commit --> save["Save state file"]
-    save --> done(["Done"])
-```
-
-### How each file is decided
-
-For every tracked file dotsync computes three hashes: the file on disk, the
-file in the repo (after rendering templates), and the one it recorded the
-last time it synced that file.
-
-```mermaid
-flowchart TD
-    f(["Tracked file"]) --> known{"Synced before?<br/>(has a last-synced hash)"}
-
-    known -- no --> ondisk{"Exists on disk?"}
-    ondisk -- no --> pullnew["↓ Pull: write it from the repo"]
-    ondisk -- yes --> samenew{"Disk = repo?"}
-    samenew -- yes --> recordnew["· Record hash, nothing to do"]
-    samenew -- no --> conflictnew["! Conflict: resolve with<br/>conflict_resolution"]
-
-    known -- yes --> changed{"What changed since<br/>the last sync?"}
-    changed -- "nothing" --> nothing["· Already in sync"]
-    changed -- "only disk" --> push["↑ Push: copy disk → repo"]
-    changed -- "only repo" --> pull["↓ Pull: write repo → disk"]
-    changed -- "both" --> same{"Disk = repo?"}
-    same -- yes --> record["· Record hash, nothing to do"]
-    same -- no --> conflict["! Conflict: resolve with<br/>conflict_resolution"]
-```
+- [Changelog](#changelog)
+- [How it works](#how-it-works)
 
 ## Install
 
@@ -263,7 +201,7 @@ other profile is a `profiles/<name>` branch that starts as a copy of `base`
 and adds its own commits on top.
 
 ```mermaid
-%%{init: {"gitGraph": {"mainBranchName": "base"}}}%%
+%%{init: {"themeVariables": {"background": "#00000000", "fontSize": "13px", "commitLabelBackground": "#00000000", "commitLabelColor": "#8b949e"}, "gitGraph": {"mainBranchName": "base", "rotateCommitLabel": false, "parallelCommits": false}}}%%
 gitGraph
     commit id: "add .vimrc"
     commit id: "add kitty"
@@ -364,3 +302,66 @@ state_path: ~/.local/state/dotsync/state.json
 
 See [CHANGELOG.md](CHANGELOG.md). dotsync is pre-1.0: minor releases may
 include breaking changes, which are always called out there.
+
+## How it works
+
+Three places are involved: your files on disk, a local clone of your
+dotfiles repo, and GitHub. A machine-local state file records the hash of
+what was last synced for each file, which is how dotsync tells which side
+changed. Templates (`.j2`) are rendered on the way to disk.
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#00000000", "primaryColor": "#00000000", "mainBkg": "#00000000", "secondaryColor": "#00000000", "tertiaryColor": "#00000000", "clusterBkg": "#00000000", "edgeLabelBackground": "#00000000", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+flowchart LR
+    state["state.json<br/>last-synced hashes"]
+    disk["Disk<br/>~/.vimrc …"]
+    clone["Local clone<br/>~/.local/share/dotsync/repo"]
+    gh[("GitHub")]
+    state -.- disk
+    disk -- "push / add" --> clone
+    clone -- "pull / checkout" --> disk
+    clone -- "git push" --> gh
+    gh -- "git pull" --> clone
+```
+
+### What `dotsync sync` does
+
+On a profile other than `base`, sync first merges `base` into the
+profile branch. It then decides each file as below, commits and pushes if
+anything in the repo changed (plain pushes or conflicts the disk won), and
+saves the state file.
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#00000000", "primaryColor": "#00000000", "mainBkg": "#00000000", "secondaryColor": "#00000000", "tertiaryColor": "#00000000", "clusterBkg": "#00000000", "edgeLabelBackground": "#00000000", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+flowchart LR
+    start(["sync"]) --> pull["git pull<br/>profile branch"]
+    pull --> merge["merge base in<br/>(profiles only)"]
+    merge --> each["each file:<br/>decide + act"]
+    each --> commit["commit + push<br/>if repo changed"]
+    commit --> save(["save state"])
+```
+
+### How each file is decided
+
+For every tracked file dotsync computes three hashes: the file on disk, the
+file in the repo (after rendering templates), and the one it recorded the
+last time it synced that file.
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#00000000", "primaryColor": "#00000000", "mainBkg": "#00000000", "secondaryColor": "#00000000", "tertiaryColor": "#00000000", "clusterBkg": "#00000000", "edgeLabelBackground": "#00000000", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "primaryTextColor": "#8b949e", "textColor": "#8b949e", "fontSize": "13px"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background-color: transparent !important; } .edgeLabel rect { fill: transparent !important; }", "flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
+flowchart LR
+    f(["file"]) --> known{"synced<br/>before?"}
+    known -- no --> ondisk{"on disk?"}
+    ondisk -- no --> pullnew["↓ pull"]
+    ondisk -- yes --> same
+    known -- yes --> changed{"changed<br/>since?"}
+    changed -- neither --> nothing["· in sync"]
+    changed -- disk --> push["↑ push"]
+    changed -- repo --> pull["↓ pull"]
+    changed -- both --> same{"disk =<br/>repo?"}
+    same -- yes --> rec["· record"]
+    same -- no --> conf["! conflict"]
+```
+
+*record*: nothing to copy, just remember the hash. *conflict*: settled by
+`conflict_resolution` (see [Conflicts](#conflicts)).
