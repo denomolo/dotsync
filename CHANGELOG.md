@@ -4,6 +4,12 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- Licensed under the GNU General Public License v3.0 or later (`LICENSE`),
+  declared in the package metadata.
+
 ## [0.4.3] - 2026-10-03
 
 ### Fixed

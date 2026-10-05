@@ -20,6 +20,7 @@ which side changed and only asks a conflict policy to decide when both did.
 - [Configuration](#configuration)
 - [What is not synced](#what-is-not-synced)
 - [Changelog](#changelog)
+- [License](#license)
 - [How it works](#how-it-works)
 
 ## Install
@@ -302,6 +303,18 @@ state_path: ~/.local/state/dotsync/state.json
 
 See [CHANGELOG.md](CHANGELOG.md). dotsync is pre-1.0: minor releases may
 include breaking changes, which are always called out there.
+
+## License
+
+Copyright (C) 2026 Ariel Shatil
+
+dotsync is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. It is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE)
+for the full text.
 
 ## How it works
 
