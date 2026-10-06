@@ -10,6 +10,8 @@ Usage:
     dotsync add <path>...            Track files/dirs, copying them to the repo (--remote R)
     dotsync checkout <remote>...     Track repo files, writing them to disk (--local L)
     dotsync remove <local>           Stop tracking a file/dir (disk copy is kept)
+    dotsync var list|set|unset       Manage template variables (vars.yaml)
+    dotsync env list|set|unset|hook  Manage session environment variables
     dotsync profile list             List available profiles
     dotsync profile set <name>       Switch active profile
     dotsync profile new <name>       Create a new profile branch
@@ -26,6 +28,7 @@ import sys
 from pathlib import Path
 
 import click
+import yaml
 
 from . import __version__
 from .config import Config, CONFIG_PATH, profile_branch
@@ -222,8 +225,10 @@ def status():
 @cli.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--remote", metavar="REMOTE", help="Where to store it under files/.")
+@click.option("--allow-private", is_flag=True,
+              help="Track files only you can read (e.g. mode 600), which often hold secrets.")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
-def add(paths: tuple[str, ...], remote: str | None, dry_run: bool):
+def add(paths: tuple[str, ...], remote: str | None, allow_private: bool, dry_run: bool):
     """Start tracking PATHS (files or directories), stored under files/ in the repo.
 
     Several paths can be given at once, and glob patterns are expanded
@@ -240,7 +245,9 @@ def add(paths: tuple[str, ...], remote: str | None, dry_run: bool):
     Symlinks are never copied: PATHS themselves can't be symlinks, and
     symlinks inside a directory (plus nested .git directories) are skipped
     and left untouched on every sync. Binary files are skipped unless
-    include_binary: true is set in the config.
+    include_binary: true is set in the config. Private files (no access for
+    group or others, e.g. mode 600) are refused unless --allow-private is
+    given, since they often hold secrets.
     """
     try:
         locals_ = expand_paths(paths)
@@ -250,7 +257,7 @@ def add(paths: tuple[str, ...], remote: str | None, dry_run: bool):
     cfg = load_config_or_exit()
     syncer = Syncer(cfg, dry_run=dry_run)
     try:
-        results = syncer.add(locals_, remote)
+        results = syncer.add(locals_, remote, allow_private)
     except (ValueError, GitError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
@@ -339,6 +346,153 @@ def remove(local: Path, dry_run: bool):
     click.echo(f"  {verb} {click.style(result.source, fg='cyan')} (disk copy kept)")
 
 
+# ── var ────────────────────────────────────────────────────────────────────────
+
+@cli.group()
+def var():
+    """Manage template variables (vars.yaml on the active profile's branch)."""
+
+
+@var.command("list")
+def var_list():
+    """List variables for the active profile."""
+    cfg = load_config_or_exit()
+    variables = Syncer(cfg, dry_run=True).var_list()
+    if not variables:
+        click.echo("No variables set. Add one with `dotsync var set name=value`.")
+        return
+    width = max(len(n) for n in variables)
+    for name, value in variables.items():
+        shown = value if isinstance(value, str) else yaml.safe_dump(
+            value, default_flow_style=True, width=float("inf")).strip().removesuffix("...").strip()
+        click.echo(f"  {click.style(name.ljust(width), fg='cyan')} = {shown}")
+
+
+@var.command("set")
+@click.argument("assignments", nargs=-1, required=True, metavar="NAME=VALUE...")
+@click.option("--yaml", "as_yaml", is_flag=True,
+              help="Parse values as YAML (numbers, booleans, lists) instead of plain strings.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def var_set(assignments: tuple[str, ...], as_yaml: bool, dry_run: bool):
+    """Set template variables and re-render the templates that use them.
+
+    Values are stored as strings unless --yaml is given. Quote values with
+    spaces for your shell: dotsync var set fullname="Ariel Shatil".
+    """
+    values = {}
+    for a in assignments:
+        name, sep, value = a.partition("=")
+        if not sep or not name:
+            click.echo(click.style(f"Expected NAME=VALUE, got {a!r}", fg="red"), err=True)
+            sys.exit(1)
+        if as_yaml:
+            try:
+                value = yaml.safe_load(value)
+            except yaml.YAMLError as e:
+                click.echo(click.style(f"Invalid YAML for {name}: {e}", fg="red"), err=True)
+                sys.exit(1)
+        values[name] = value
+    _run_var_edit(lambda syncer: syncer.var_set(values), "Would set" if dry_run else "Set",
+                  list(values), dry_run)
+
+
+@var.command("unset")
+@click.argument("names", nargs=-1, required=True)
+@click.option("--force", is_flag=True, help="Unset even if a template still uses the variable.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def var_unset(names: tuple[str, ...], force: bool, dry_run: bool):
+    """Remove template variables.
+
+    Refuses if a tracked template still uses one of them, since it could no
+    longer be rendered, unless --force is given.
+    """
+    _run_var_edit(lambda syncer: syncer.var_unset(list(names), force),
+                  "Would unset" if dry_run else "Unset", list(names), dry_run)
+
+
+def _run_var_edit(action, verb: str, names: list[str], dry_run: bool) -> None:
+    cfg = load_config_or_exit()
+    syncer = Syncer(cfg, dry_run=dry_run)
+    try:
+        results = action(syncer)
+    except (ValueError, GitError, RenderError) as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
+    click.echo(f"{verb} {', '.join(click.style(n, fg='cyan') for n in names)} "
+               f"(profile: {click.style(cfg.profile, fg='cyan')}).")
+    if results:
+        click.echo("\nUpdated files:" if not dry_run else "\nFiles to update:")
+        print_results(results, verbose=True, pending=dry_run)
+    if any(r.error for r in results):
+        sys.exit(1)
+
+
+# ── env ────────────────────────────────────────────────────────────────────────
+
+@cli.group()
+def env():
+    """Manage environment variables for your session (env: in vars.yaml)."""
+
+
+@env.command("list")
+def env_list():
+    """List environment variables for the active profile."""
+    cfg = load_config_or_exit()
+    rows = Syncer(cfg, dry_run=True).env_list()
+    if not rows:
+        click.echo("No environment variables set. Add one with `dotsync env set NAME=value`.")
+        return
+    width = max(len(r[0]) for r in rows)
+    for name, raw, rendered, error in rows:
+        line = f"  {click.style(name.ljust(width), fg='cyan')} = {raw}"
+        if error:
+            line += click.style(f"  ERROR: {error}", fg="red")
+        elif rendered != raw:
+            line += click.style(f"  → {rendered}", fg="bright_black")
+        click.echo(line)
+
+
+@env.command("set")
+@click.argument("assignments", nargs=-1, required=True, metavar="NAME=VALUE...")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def env_set(assignments: tuple[str, ...], dry_run: bool):
+    """Set environment variables and regenerate the session environment.
+
+    Values may use template variables: dotsync env set GIT_AUTHOR_EMAIL='{{ email }}'
+    (single quotes keep your shell from touching them).
+    """
+    values = {}
+    for a in assignments:
+        name, sep, value = a.partition("=")
+        if not sep or not name:
+            click.echo(click.style(f"Expected NAME=VALUE, got {a!r}", fg="red"), err=True)
+            sys.exit(1)
+        values[name] = value
+    _run_var_edit(lambda syncer: syncer.env_set(values), "Would set" if dry_run else "Set",
+                  list(values), dry_run)
+
+
+@env.command("unset")
+@click.argument("names", nargs=-1, required=True)
+@click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+def env_unset(names: tuple[str, ...], dry_run: bool):
+    """Remove environment variables."""
+    _run_var_edit(lambda syncer: syncer.env_unset(list(names)),
+                  "Would unset" if dry_run else "Unset", list(names), dry_run)
+
+
+@env.command("hook")
+def env_hook():
+    """Print the line that loads dotsync's environment in your shell."""
+    cfg = load_config_or_exit()
+    path = str(Syncer(cfg, dry_run=True).env_path).replace(str(Path.home()), "~", 1)
+    click.echo(f"The systemd user session reads {path} by itself.")
+    click.echo("For shells, add this line to ~/.profile (login shells, SSH), and to")
+    click.echo("~/.bashrc or ~/.zshrc to have it in every interactive shell too:\n")
+    click.echo(f"    [ -r {path} ] && {{ set -a; . {path}; set +a; }}\n")
+    click.echo("Open a new shell to pick up changes.")
+
+
 # ── profile ────────────────────────────────────────────────────────────────────
 
 @cli.group()
@@ -376,7 +530,6 @@ def profile_set(name: str):
         sys.exit(1)
 
     # Rewrite config with new profile
-    import yaml
     with CONFIG_PATH.open() as f:
         data = yaml.safe_load(f)
     data["profile"] = name

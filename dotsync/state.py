@@ -91,8 +91,12 @@ class State:
 
 # ── Hashing ────────────────────────────────────────────────────────────────────
 
-# Directory entries never synced (nested git checkouts would become submodules)
-IGNORED_NAMES = {".git"}
+# File dotsync generates in ~/.config/environment.d from the env: section
+ENV_D_NAME = "99-env.conf"
+
+# Directory entries never synced (nested git checkouts would become
+# submodules; dotsync's own generated env file must not end up in the repo)
+IGNORED_NAMES = {".git", ENV_D_NAME}
 
 # Bytes sniffed for binary detection (same heuristic as git: a NUL byte → binary)
 BINARY_SNIFF_BYTES = 8192

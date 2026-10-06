@@ -9,6 +9,24 @@ include breaking changes.
 ### Added
 - Licensed under the GNU General Public License v3.0 or later (`LICENSE`),
   declared in the package metadata.
+- `dotsync add` refuses private files (no group/other permissions, e.g.
+  mode 600 or a 700 directory like `~/.ssh`, or a directory containing such
+  a file), since they usually hold secrets. `--allow-private` overrides it.
+- `dotsync var list | set NAME=VALUE... | unset NAME...` manages template
+  variables in `vars.yaml` on the active profile's branch: it keeps comments,
+  re-renders templates on disk, and commits and pushes. Values are strings
+  unless `--yaml` is given; `unset` refuses variables a template still uses
+  unless `--force`.
+- `dotsync env list | set | unset | hook` manages session environment
+  variables in a separate `env:` section of `vars.yaml`. Values may use
+  template variables. dotsync writes them to
+  `~/.config/environment.d/99-env.conf`, which the systemd user session
+  reads (dotsync also updates the running session) and shells source via
+  the line `env hook` prints. The file is never tracked.
+
+### Fixed
+- Pulling a single file keeps its executable bit; scripts used to come out
+  as mode 644. (Files inside tracked directories already kept it.)
 
 ## [0.4.3] - 2026-10-03
 

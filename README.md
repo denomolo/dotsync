@@ -16,6 +16,7 @@ which side changed and only asks a conflict policy to decide when both did.
 - [Dotfiles repo layout](#dotfiles-repo-layout)
 - [Profiles](#profiles)
 - [Templates](#templates)
+- [Environment variables](#environment-variables)
 - [Conflicts](#conflicts)
 - [Configuration](#configuration)
 - [What is not synced](#what-is-not-synced)
@@ -35,7 +36,7 @@ This repository is private, so you need collaborator access. Install a
 tagged release straight from GitHub:
 
 ```sh
-pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.4.3
+pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.5.0
 dotsync --version
 ```
 
@@ -95,9 +96,11 @@ dotsync checkout '*'                  # everything in the repo
 | `dotsync status` | Show what `sync` would do for each file, without changing anything. |
 | `dotsync push [PATH...]` | Force disk → repo, for every file or just `PATH`s. Commits and pushes. |
 | `dotsync pull [PATH...]` | Force repo → disk, for every file or just `PATH`s. |
-| `dotsync add PATH... [--remote R]` | Start tracking files or directories from disk. |
+| `dotsync add PATH... [--remote R] [--allow-private]` | Start tracking files or directories from disk. |
 | `dotsync checkout REMOTE... [--local L] [--force]` | Start tracking files that are already in the repo, writing them to disk. |
 | `dotsync remove PATH` | Stop tracking a file or directory. The copy on disk is kept. |
+| `dotsync var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
+| `dotsync env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
 | `dotsync profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
 | `dotsync service install \| uninstall \| status` | Manage the systemd user service that syncs on login. |
 | `dotsync --version` | Print the installed version. |
@@ -132,9 +135,14 @@ dotsync add /etc/hosts --remote system/      # outside ~ needs --remote
   `/`, is an existing directory, or several paths are given, each path keeps
   its name inside `R`.
 - Everything is added in one commit. Paths that can't be added (missing,
-  already tracked, binary, a symlink, or two paths that would land on the
-  same repo path) are reported, the rest are still added, and the command
-  exits with status 1.
+  already tracked, binary, private, a symlink, or two paths that would land
+  on the same repo path) are reported, the rest are still added, and the
+  command exits with status 1.
+- Private files are refused: a file only you can access (no group or other
+  permissions, e.g. mode `600`), a directory like that (e.g. `~/.ssh` at
+  `700`), or a directory containing such a file. They usually hold secrets,
+  and their contents would end up in your dotfiles repo. Pass
+  `--allow-private` to track them anyway.
 
 ### `checkout`
 
@@ -250,8 +258,31 @@ editor: nvim
     editor = {{ editor }}
 ```
 
-Profiles override variables by editing `vars.yaml` on their branch.
 Directories are always copied verbatim, never rendered.
+
+### Variables
+
+Manage `vars.yaml` with `dotsync var` instead of editing it in the repo:
+
+```sh
+dotsync var set fullname="Ariel Shatil" email=ariel@example.com
+dotsync var list
+dotsync var unset editor
+```
+
+- `set` and `unset` change `vars.yaml` on the **active profile's branch**,
+  re-render the templates on disk, and commit and push, so other machines
+  get the change on their next sync. Comments in `vars.yaml` are kept.
+- Values are stored as strings: `port=22` and `debug=true` stay `"22"` and
+  `"true"`. Add `--yaml` to parse values as YAML instead, for numbers,
+  booleans or lists (`--yaml retries=3 hosts="[a, b]"`).
+- `unset` refuses a variable that a tracked template still uses, since the
+  template could no longer render; `--force` unsets it anyway.
+- Both take `--dry-run`. Names are letters, digits and `_`, not starting
+  with a digit.
+- On a profile, `set` overrides the `base` value for that profile only, and
+  later changes to `base` still merge in. `unset` on a profile removes the
+  variable for that profile; it doesn't fall back to `base`'s value.
 
 Templated files only flow **repo → disk**. If you edit the rendered file on
 disk (e.g. `~/.gitconfig`), `sync` and `push` report an error instead of
@@ -259,6 +290,66 @@ copying it over the template, and leave both sides alone. Make the change in
 the `.j2` file in the repo, or run `dotsync pull <path>` to discard the
 local edit. See
 [`dot_gitconfig.j2.example`](dot_gitconfig.j2.example).
+
+## Environment variables
+
+`dotsync env` manages environment variables for your session, such as
+`EDITOR` or `GIT_AUTHOR_EMAIL`. They live in their own `env:` section of
+`vars.yaml`, separate from template variables, so only what you list there
+is exported:
+
+```sh
+dotsync env set EDITOR=nvim BROWSER=firefox
+dotsync env set GIT_AUTHOR_EMAIL='{{ email }}'   # reuse a template variable
+dotsync env list
+dotsync env unset BROWSER
+```
+
+```yaml
+# vars.yaml
+email: ariel@example.com
+env:
+  EDITOR: nvim
+  GIT_AUTHOR_EMAIL: '{{ email }}'
+```
+
+On every `sync`, `pull`, `checkout` and `var`/`env` change, dotsync writes
+them to **`~/.config/environment.d/99-env.conf`**, one `KEY="value"` per
+line, a format both systemd and POSIX shells read:
+
+- **systemd user session:** reads the file by itself, so user services and
+  the graphical session on desktops started through systemd (e.g. GNOME,
+  KDE Plasma) get the variables. dotsync also updates the running session,
+  so newly started services see changes straight away.
+- **Shells** (TTYs, SSH, systems without systemd): add the line printed by
+  `dotsync env hook` to `~/.profile`, and to `~/.bashrc` / `~/.zshrc` to
+  have it in every interactive shell:
+
+```sh
+[ -r ~/.config/environment.d/99-env.conf ] && { set -a; . ~/.config/environment.d/99-env.conf; set +a; }
+```
+
+- Values may use template variables (`'{{ email }}'`); quote them with
+  single quotes so your shell leaves the braces alone. `var unset` refuses
+  a template variable that an env value still uses.
+- Values can't contain newlines or `$` (systemd would expand it), so
+  `PATH`-style expansion isn't supported. Variables your session manages
+  (`PATH`, `HOME`, `USER`, `SHELL`, `DISPLAY`, `XDG_RUNTIME_DIR`, `LD_*`
+  and similar) are refused.
+- systemd applies `environment.d` files in name order, later ones winning.
+  Many distributions link `/etc/environment` in as `99-environment.conf`,
+  which sorts *after* `99-env.conf`, so for any name set in both (often
+  `EDITOR`, `VISUAL`) the systemd session uses `/etc/environment`'s value
+  from the next login on. Until then, the running session has dotsync's
+  value, since dotsync pushes changes into it directly. Shells that source
+  the hook always get dotsync's value.
+- `99-env.conf` belongs to dotsync: don't edit it, and if you track
+  `~/.config/environment.d` itself, dotsync leaves this file out of the
+  repo.
+- Like everything in `vars.yaml`, env variables are per profile.
+- Shells that are already open keep their old environment; open a new one
+  (or re-run the hook line) to pick up changes. Graphical sessions pick up
+  `environment.d` changes at the next login.
 
 ## Conflicts
 
@@ -298,6 +389,13 @@ state_path: ~/.local/state/dotsync/state.json
   they are left untouched on both sides.
 - **Nested `.git` directories** inside a tracked directory are ignored, so
   they don't turn into submodules.
+- **Private files** (e.g. mode `600`) are refused by `add` unless you pass
+  `--allow-private`.
+- **Permissions**, apart from the executable bit: git records only whether
+  a file is executable, so pulled files get your default permissions
+  (usually `644`, or `755` for executables). A file tracked with
+  `--allow-private` is therefore *not* kept at `600` on other machines. A
+  change to the executable bit alone, with no content change, isn't synced.
 
 ## Changelog
 

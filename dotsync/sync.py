@@ -23,6 +23,8 @@ import glob
 import os
 import re
 import shutil
+import subprocess
+import stat
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,7 +37,7 @@ import yaml
 from .config import Config
 from .renderer import Renderer, RenderError
 from .repo import Repo, GitError
-from .state import IGNORED_NAMES, State, hash_path, is_binary, iter_dir_files, sha256, sha256_dir
+from .state import ENV_D_NAME, IGNORED_NAMES, State, hash_path, is_binary, iter_dir_files, sha256, sha256_dir
 
 
 class Action(Enum):
@@ -87,7 +89,8 @@ class Syncer:
         if not self.dry_run:
             self.state.save()
 
-        return results
+        # 5. Regenerate the session environment from vars.yaml (env:)
+        return results + self._env_results()
 
     def push_all(self, patterns: list[str] | None = None) -> list[FileResult]:
         """Force disk → repo for all files, or only those matching `patterns` (machine-wins)."""
@@ -112,7 +115,7 @@ class Syncer:
         results = [self._pull_file(entry["source"], Path(entry["dest"])) for entry in manifest]
         if not self.dry_run:
             self.state.save()
-        return results
+        return results + (self._env_results() if not patterns else [])
 
     def status(self) -> list[FileResult]:
         """Dry-run: report per-file action without making changes."""
@@ -120,11 +123,12 @@ class Syncer:
         self.dry_run = True
         try:
             manifest = self.renderer.load_manifest()
-            return [self._process_entry(entry) for entry in manifest]
+            return [self._process_entry(entry) for entry in manifest] + self._env_results()
         finally:
             self.dry_run = old_dry
 
-    def add(self, locals_: list[Path], remote: str | None = None) -> list[FileResult]:
+    def add(self, locals_: list[Path], remote: str | None = None,
+            allow_private: bool = False) -> list[FileResult]:
         """
         Start tracking one or more local files or directories.
 
@@ -133,8 +137,9 @@ class Syncer:
         state, then everything is committed and pushed in a single commit.
         With several paths, `remote` is always treated as a directory.
 
-        Paths that can't be added (missing, already tracked, binary, …) are
-        returned with `error` set; the rest are still added.
+        Paths that can't be added (missing, already tracked, binary, private
+        unless `allow_private`, …) are returned with `error` set; the rest are
+        still added.
         """
         branch = self.config.branch
         as_dir = len(locals_) > 1
@@ -145,7 +150,7 @@ class Syncer:
         for local in locals_:
             dest = local.expanduser().absolute()
             try:
-                source = self._plan_add(dest, remote, as_dir, manifest, planned)
+                source = self._plan_add(dest, remote, as_dir, manifest, planned, allow_private)
             except ValueError as e:
                 results.append(FileResult(dest=dest, source="", action=Action.PUSH, error=str(e)))
                 continue
@@ -171,7 +176,8 @@ class Syncer:
         return results
 
     def _plan_add(self, dest: Path, remote: str | None, as_dir: bool,
-                  manifest: list[dict], planned: list[tuple[str, Path]]) -> str:
+                  manifest: list[dict], planned: list[tuple[str, Path]],
+                  allow_private: bool = False) -> str:
         """Validate adding `dest` and return its repo source path, or raise ValueError."""
         if not dest.exists():
             raise ValueError(f"Local path not found: {dest}")
@@ -182,6 +188,15 @@ class Syncer:
                 f"{dest} is a binary file; only text files are synced "
                 "(set include_binary: true in config to allow binaries)"
             )
+        if not allow_private:
+            private = _find_private(dest, self.include_binary)
+            if private is not None:
+                where = "is private" if private == dest else f"contains private file {private}"
+                raise ValueError(
+                    f"{dest} {where} (mode {stat.S_IMODE(private.stat().st_mode):o}), which "
+                    "usually means it holds secrets; its contents would be pushed to your "
+                    "dotfiles repo (use --allow-private to track it anyway)"
+                )
 
         files_root = self.config.repo_path / "files"
         if remote is None:
@@ -259,7 +274,7 @@ class Syncer:
                        else f"checkout: {len(added)} files\n\n" + "\n".join(added))
             self._git_commit_and_push(branch, message=message)
             self.state.save()
-        return results
+        return results + self._env_results()
 
     def _expand_sources(self, patterns: list[str]) -> list[str]:
         """Expand repo paths/globs (relative to files/) into manifest sources."""
@@ -319,6 +334,175 @@ class Syncer:
             if not same:
                 raise ValueError(f"{dest} already exists with different content (use --force to overwrite)")
         return dest
+
+    # ── Variables ──────────────────────────────────────────────────────────────
+
+    def var_list(self) -> dict:
+        """Template variables in vars.yaml on the active profile's branch."""
+        self.repo.checkout(self.config.branch)
+        return {k: v for k, v in self.renderer.vars.items() if k != "env"}
+
+    def var_set(self, values: dict[str, object]) -> list[FileResult]:
+        """
+        Set variables in vars.yaml on the active profile's branch, re-render
+        the templates on disk, then commit and push. Comments are preserved.
+        Returns the results for templates whose output changed.
+        """
+        for name in values:
+            _check_var_name(name)
+        return self._edit_vars(
+            lambda text: _vars_set(text, values),
+            message="var: set " + ", ".join(values),
+        )
+
+    def var_unset(self, names: list[str], force: bool = False) -> list[FileResult]:
+        """
+        Remove variables from vars.yaml on the active profile's branch.
+        Refuses if a tracked template still uses one, unless `force`.
+        """
+        branch = self.config.branch
+        self._git_pull(branch)
+        current = self.renderer.vars
+        missing = [n for n in names if n not in current]
+        if missing:
+            raise ValueError(f"Not set: {', '.join(missing)}")
+        if "env" in names:
+            raise ValueError("`env` holds environment variables; use `dotsync env unset`")
+        if not force:
+            used = {}
+            for entry in self.renderer.load_manifest():
+                for name in self.renderer.template_variables(entry["source"]) & set(names):
+                    used.setdefault(name, []).append(entry["source"])
+            for env_name, value in _env_section(current).items():
+                for name in self.renderer.string_variables(_env_str(value)) & set(names):
+                    used.setdefault(name, []).append(f"env {env_name}")
+            if used:
+                details = "; ".join(f"{n} by {', '.join(srcs)}" for n, srcs in used.items())
+                raise ValueError(f"Still used: {details} (use --force to unset anyway)")
+        return self._edit_vars(
+            lambda text: _vars_unset(text, names),
+            message="var: unset " + ", ".join(names),
+            pulled=True,
+        )
+
+    def _edit_vars(self, edit, message: str, pulled: bool = False) -> list[FileResult]:
+        """Apply `edit` to vars.yaml text, re-render templates, commit and push."""
+        branch = self.config.branch
+        if not pulled:
+            self._git_pull(branch)
+        self.repo.checkout(branch)
+        vars_path = self.config.repo_path / "vars.yaml"
+        old_text = vars_path.read_text() if vars_path.exists() else ""
+        _load_vars_text(old_text)
+        new_text = edit(old_text)
+        new_vars = _load_vars_text(new_text)
+
+        # Templates are rendered from the new values whether or not we write them
+        self.renderer._vars = new_vars
+        env = self._render_env(new_vars)   # refuse edits that would break the env
+        templates = [e for e in self.renderer.load_manifest() if e["source"].endswith(".j2")]
+        results = [r for r in (self._process_entry(e) for e in templates)
+                   if r.action != Action.NOTHING or r.error]
+        if self.dry_run:
+            return results + self._apply_env(env)
+
+        vars_path.write_text(new_text)
+        self._git_commit_and_push(branch, message=message)
+        self.state.save()
+        return results + self._apply_env(env)
+
+    # ── Environment variables ──────────────────────────────────────────────────
+
+    def env_list(self) -> list[tuple[str, str, str | None, str | None]]:
+        """(name, raw value, rendered value, error) for each env: entry."""
+        self.repo.checkout(self.config.branch)
+        variables = self.renderer.vars
+        rows = []
+        for name, value in _env_section(variables).items():
+            raw = _env_str(value)
+            try:
+                rows.append((name, raw, self.renderer.render_string(raw, variables), None))
+            except RenderError as e:
+                rows.append((name, raw, None, str(e)))
+        return rows
+
+    def env_set(self, values: dict[str, str]) -> list[FileResult]:
+        """Set environment variables in the env: section of vars.yaml."""
+        for name, value in values.items():
+            _check_env_name(name)
+            if "\n" in value:
+                raise ValueError(f"{name}: env values can't contain newlines")
+        return self._edit_vars(lambda text: _env_edit(text, set_values=values),
+                               message="env: set " + ", ".join(values))
+
+    def env_unset(self, names: list[str]) -> list[FileResult]:
+        """Remove environment variables from the env: section of vars.yaml."""
+        self._git_pull(self.config.branch)
+        missing = [n for n in names if n not in _env_section(self.renderer.vars)]
+        if missing:
+            raise ValueError(f"Not set: {', '.join(missing)}")
+        return self._edit_vars(lambda text: _env_edit(text, remove=names),
+                               message="env: unset " + ", ".join(names), pulled=True)
+
+    @property
+    def env_path(self) -> Path:
+        return Path.home() / ".config" / "environment.d" / ENV_D_NAME
+
+    def _render_env(self, variables: dict) -> dict[str, str]:
+        """Rendered env: section, or raise ValueError if it can't be exported."""
+        env = {}
+        for name, value in _env_section(variables).items():
+            _check_env_name(name)
+            try:
+                rendered = self.renderer.render_string(_env_str(value), variables)
+            except RenderError as e:
+                raise ValueError(f"env {name}: {e}") from e
+            for bad, what in (("\n", "newlines"), ("$", "$ (systemd would expand it)")):
+                if bad in rendered:
+                    raise ValueError(f"env {name}: values can't contain {what}")
+            env[name] = rendered
+        return env
+
+    def _env_results(self) -> list[FileResult]:
+        """Regenerate the env files from the current vars, reporting what changed."""
+        try:
+            env = self._render_env(self.renderer.vars)
+        except (ValueError, RenderError) as e:
+            return [FileResult(dest=self.env_path, source="vars.yaml env:",
+                               action=Action.PULL, error=str(e))]
+        return self._apply_env(env)
+
+    def _apply_env(self, env: dict[str, str]) -> list[FileResult]:
+        """
+        Write ~/.config/environment.d/99-env.conf, read by the systemd user
+        session and sourced by shells (see `dotsync env hook`), then update
+        the running systemd user manager. Returns a result if it changed.
+        """
+        path = self.env_path
+        text = ("# Generated by dotsync from the env: section of vars.yaml; do not edit.\n"
+                "# Shells load it with: set -a; . <this file>; set +a\n"
+                + "".join(f'{k}="{_env_quote(v)}"\n' for k, v in env.items())) if env else None
+        old = path.read_text() if path.exists() else None
+        if text == old:
+            return []
+        result = FileResult(dest=path, source="vars.yaml env:",
+                            action=Action.PULL if text is not None else Action.UNTRACK)
+        if self.dry_run:
+            return [result]
+        old_names = set(re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)=", old or "", flags=re.M))
+        try:
+            if text is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_name(path.name + ".dotsync_tmp")
+                tmp.write_text(text)
+                tmp.replace(path)
+        except OSError as e:
+            result.error = str(e)
+            return [result]
+        _update_systemd_env(env, old_names - env.keys())
+        return [result]
 
     def _select_entries(self, manifest: list[dict], patterns: list[str] | None) -> list[dict]:
         """
@@ -549,6 +733,11 @@ class Syncer:
         tmp = dest.with_suffix(dest.suffix + ".dotsync_tmp")
         try:
             tmp.write_bytes(rendered)
+            # Carry over the executable bit git recorded; other bits stay at
+            # the umask default (modes like 600 aren't stored in git)
+            if abs_source.stat().st_mode & stat.S_IXUSR:
+                mode = tmp.stat().st_mode
+                tmp.chmod(mode | (mode & 0o444) >> 2)
             tmp.replace(dest)
         except Exception as e:
             tmp.unlink(missing_ok=True)
@@ -676,6 +865,224 @@ class Syncer:
 
 
 # ── Directory helpers ──────────────────────────────────────────────────────────
+
+_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _check_var_name(name: str) -> None:
+    if not _VAR_NAME_RE.fullmatch(name):
+        raise ValueError(f"Invalid variable name {name!r}: use letters, digits and _, "
+                         "not starting with a digit")
+    if name == "env":
+        raise ValueError("`env` holds environment variables; use `dotsync env set`")
+
+
+# Exporting these would break the session or hijack programs
+_PROTECTED_ENV = {
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "SHLVL", "TERM",
+    "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XDG_SESSION_ID",
+    "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "SSH_CONNECTION", "MAIL", "IFS",
+}
+
+
+def _check_env_name(name: str) -> None:
+    if not _VAR_NAME_RE.fullmatch(name):
+        raise ValueError(f"Invalid environment variable name {name!r}: use letters, digits "
+                         "and _, not starting with a digit")
+    if name in _PROTECTED_ENV or name.startswith(("LD_", "BASH_FUNC_")):
+        raise ValueError(f"{name} is managed by your session and can't be set by dotsync")
+
+
+def _env_section(variables: dict) -> dict:
+    env = variables.get("env") or {}
+    if not isinstance(env, dict):
+        raise ValueError("env: in vars.yaml must be a mapping of names to values")
+    return env
+
+
+def _env_str(value: object) -> str:
+    """Hand-written YAML values (true, 3) as the strings they'd be in a shell."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _env_quote(value: str) -> str:
+    r"""
+    Escape for a double-quoted value that systemd's environment.d parser and
+    POSIX shells read identically: both unescape \\ \" and \` there.
+    ($ is refused earlier: systemd would expand it.)
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`")
+
+
+def _update_systemd_env(env: dict[str, str], removed: set[str]) -> None:
+    """Best effort: make newly started user services see the change without re-login."""
+    if not shutil.which("systemctl"):
+        return
+    for args in ((["set-environment", *(f"{k}={v}" for k, v in env.items())] if env else None),
+                 (["unset-environment", *sorted(removed)] if removed else None)):
+        if args:
+            try:
+                subprocess.run(["systemctl", "--user", *args], capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def _deeper(line: str, indent: str) -> bool:
+    """True for a non-blank line indented further than `indent`."""
+    return bool(line.strip()) and line.startswith(indent) and line[len(indent):][:1] in (" ", "\t")
+
+
+def _var_block(lines: list[str], name: str, indent: str = "",
+               start: int = 0, stop: int | None = None) -> tuple[int, int] | None:
+    """Line range [start, end) of key `name` at `indent` in vars.yaml, or None."""
+    stop = len(lines) if stop is None else stop
+    n = re.escape(name)
+    key = re.compile(rf"""^{re.escape(indent)}(?:{n}|"{n}"|'{n}')\s*:""")
+    for i in range(start, stop):
+        if key.match(lines[i]):
+            end = i + 1
+            # The value continues on deeper lines; blank and comment lines in
+            # between belong to it, trailing ones don't
+            while end < stop and (_deeper(lines[end], indent) or not lines[end].strip()
+                                  or lines[end].lstrip().startswith("#")):
+                end += 1
+            while end > i + 1 and not _deeper(lines[end - 1], indent):
+                end -= 1
+            return i, end
+    return None
+
+
+def _replace_entry(lines: list[str], block: tuple[int, int], entry: str) -> None:
+    """Replace a key's lines, keeping a trailing comment on a one-line value."""
+    old_line = lines[block[0]].rstrip("\n")
+    m = re.search(r"\s+#[^\n]*$", old_line)
+    if (block[1] - block[0] == 1 and m and entry.count("\n") == 1
+            and _safe_load_or_none(old_line) == _safe_load_or_none(old_line[:m.start()])):
+        entry = entry.rstrip("\n") + m.group(0) + "\n"
+    lines[block[0]:block[1]] = [entry]
+
+
+def _safe_load_or_none(text: str):
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+
+
+def _load_vars_text(text: str) -> dict:
+    try:
+        parsed = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"vars.yaml is not valid YAML: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError("vars.yaml must be a mapping of names to values")
+    return parsed
+
+
+def _yaml_entry(name: str, value: object) -> str:
+    """One `name: value` line (lists/maps inline), or a block if the value needs it."""
+    inline = yaml.safe_dump(value, default_flow_style=True, allow_unicode=True, width=float("inf"))
+    inline = inline.removesuffix("\n").removesuffix("\n...").rstrip("\n")
+    if "\n" not in inline:
+        return f"{name}: {inline}\n"
+    return yaml.safe_dump({name: value}, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _vars_set(text: str, values: dict[str, object]) -> str:
+    """Set top-level keys in vars.yaml text, keeping comments and order."""
+    lines = text.splitlines(keepends=True)
+    for name, value in values.items():
+        entry = _yaml_entry(name, value)
+        block = _var_block(lines, name)
+        if block:
+            _replace_entry(lines, block, entry)
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(entry)
+    new_text = "".join(lines)
+    parsed = _load_vars_text(new_text)
+    if any(parsed.get(n) != v for n, v in values.items()):
+        raise ValueError("Could not cleanly edit vars.yaml; edit it by hand in the repo")
+    return new_text
+
+
+def _env_edit(text: str, set_values: dict[str, str] | None = None,
+              remove: list[str] | None = None) -> str:
+    """Set or remove keys in the env: section of vars.yaml text, keeping comments."""
+    set_values, remove = set_values or {}, remove or []
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    block = _var_block(lines, "env")
+    if block and lines[block[0]].split(":", 1)[1].split("#", 1)[0].strip():
+        # Inline form (`env: {}` or `env: {A: b}`): rewrite as a block
+        current = _env_section(_load_vars_text(lines[block[0]]))
+        lines[block[0]:block[1]] = ["env:\n"] + ["  " + _yaml_entry(k, _env_str(v))
+                                                 for k, v in current.items()]
+        block = _var_block(lines, "env")
+    if block is None:
+        if not set_values:
+            return text
+        lines.append("env:\n")
+        block = (len(lines) - 1, len(lines))
+
+    start, end = block
+    indent = next((re.match(r"[ \t]+", l).group(0) for l in lines[start + 1:end]
+                   if _deeper(l, "") and not l.lstrip().startswith("#")), "  ")
+    for name in remove:
+        b = _var_block(lines, name, indent, start + 1, end)
+        if b:
+            del lines[b[0]:b[1]]
+            end -= b[1] - b[0]
+    for name, value in set_values.items():
+        entry = indent + _yaml_entry(name, value)
+        b = _var_block(lines, name, indent, start + 1, end)
+        if b:
+            _replace_entry(lines, b, entry)
+            end -= b[1] - b[0] - 1
+        else:
+            lines.insert(end, entry)
+            end += 1
+
+    new_text = "".join(lines)
+    env = _env_section(_load_vars_text(new_text))
+    if any(_env_str(env.get(n)) != v or n not in env for n, v in set_values.items()) \
+            or any(n in env for n in remove):
+        raise ValueError("Could not cleanly edit vars.yaml; edit it by hand in the repo")
+    return new_text
+
+
+def _vars_unset(text: str, names: list[str]) -> str:
+    """Remove top-level keys from vars.yaml text, keeping everything else."""
+    lines = text.splitlines(keepends=True)
+    for name in names:
+        block = _var_block(lines, name)
+        if block:
+            del lines[block[0]:block[1]]
+    new_text = "".join(lines)
+    if any(n in _load_vars_text(new_text) for n in names):
+        raise ValueError("Could not cleanly edit vars.yaml; edit it by hand in the repo")
+    return new_text
+
+
+def _find_private(path: Path, include_binary: bool = False) -> Path | None:
+    """
+    First path that group and others can't access at all (e.g. 600, 700):
+    `path` itself, or a synced file inside it if it's a directory.
+    """
+    if not path.stat().st_mode & 0o077:
+        return path
+    if path.is_dir():
+        for f in iter_dir_files(path, include_binary):
+            if not f.stat().st_mode & 0o077:
+                return f
+    return None
+
 
 def _mtime(path: Path, include_binary: bool = False) -> float:
     """mtime of a file, or the newest file mtime inside a directory (0 if missing)."""

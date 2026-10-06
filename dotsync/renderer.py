@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound, meta
 
 
 class RenderError(Exception):
@@ -44,6 +44,30 @@ class Renderer:
         if self._vars is None:
             self._vars = self._load_yaml(self.repo_path / "vars.yaml")
         return self._vars
+
+    def render_string(self, text: str, variables: dict[str, Any] | None = None) -> str:
+        """Render a string as a template (used for env values)."""
+        try:
+            return self.env.from_string(text).render(**(self.vars if variables is None else variables))
+        except Exception as e:
+            raise RenderError(f"Could not render {text!r}: {e}") from e
+
+    def string_variables(self, text: str) -> set[str]:
+        """Names of the variables a template string reads."""
+        try:
+            return meta.find_undeclared_variables(self.env.parse(text))
+        except Exception as e:
+            raise RenderError(f"Could not parse {text!r}: {e}") from e
+
+    def template_variables(self, source_rel: str) -> set[str]:
+        """Names of the variables a .j2 template reads (empty for other files)."""
+        abs_path = self.resolve_source(source_rel)
+        if abs_path.is_dir() or not source_rel.endswith(".j2"):
+            return set()
+        try:
+            return meta.find_undeclared_variables(self.env.parse(abs_path.read_text()))
+        except Exception as e:
+            raise RenderError(f"Could not parse template {source_rel}: {e}") from e
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
