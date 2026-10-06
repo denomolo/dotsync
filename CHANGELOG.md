@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-06
 
 ### Added
 - `dotsync status [PATH...]` shows the status of just those tracked files or
