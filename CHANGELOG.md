@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.5.1] - 2026-10-05
 
 ### Added
 - Test suite (`pytest`, run with `pip install -e '.[dev]'` then `pytest`)

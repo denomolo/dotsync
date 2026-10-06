@@ -37,7 +37,7 @@ This repository is private, so you need collaborator access. Install a
 tagged release straight from GitHub:
 
 ```sh
-pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.5.0
+pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.5.1
 dotsync --version
 ```
 
