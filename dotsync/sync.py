@@ -11,10 +11,11 @@ For each file in the manifest, the decision matrix is:
   True         | True         | CONFLICT → resolve per conflict_resolution
 
 Conflict resolution modes:
-  machine-wins     — disk wins (default): the repo's version stays in git
-                     history, while a local file that's overwritten is gone
-  last-write-wins  — newer side wins (disk mtime vs last commit time)
-  git-wins         — repo always wins (good for recovering from local mess)
+  local-wins   — this machine's version wins (default): the repo's version
+                 stays in git history, while a local file that's overwritten
+                 is gone
+  newer-wins   — newer side wins (disk mtime vs last commit time)
+  repo-wins    — the repo's version always wins
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import yaml
 
@@ -66,6 +67,11 @@ class FileResult:
     resolved_by: Optional[str] = None   # how a conflict was resolved
     error: Optional[str] = None
     skipped: Optional[str] = None       # why the file was skipped (e.g. "binary")
+    diff: Optional[list[str]] = None    # unified diff lines, for `status --diff`
+
+
+class PullDeclined(Exception):
+    """`pull` stopped because overwriting local changes wasn't confirmed."""
 
 
 class _PreviewRepo(Repo):
@@ -123,7 +129,7 @@ class Syncer:
         return results + self._env_results()
 
     def push_all(self, patterns: list[str] | None = None) -> list[FileResult]:
-        """Force disk → repo for all files, or only those matching `patterns` (machine-wins)."""
+        """Force disk → repo for all files, or only those matching `patterns` (like local-wins)."""
         branch = self.config.branch
         manifest = self._select_entries(self.renderer.load_manifest(), patterns)
         results = [self._push_file(entry["source"], Path(entry["dest"])) for entry in manifest]
@@ -138,26 +144,75 @@ class Syncer:
         return results
 
     @_previewable
-    def pull_all(self, patterns: list[str] | None = None) -> list[FileResult]:
-        """Force repo → disk for all files, or only those matching `patterns` (git-wins)."""
+    def pull_all(self, patterns: list[str] | None = None,
+                 confirm: Callable[[list[Path]], bool] | None = None) -> list[FileResult]:
+        """
+        Copy the repo's version to disk for all files, or only those matching
+        `patterns` (like repo-wins). Local files that would lose content not
+        in the repo are listed to `confirm` first; if it returns False (or no
+        `confirm` is given), nothing is written and PullDeclined is raised.
+        """
         branch = self.config.branch
         self._git_pull(branch)
         manifest = self._select_entries(self.renderer.load_manifest(), patterns)
+        at_risk = [Path(e["dest"]) for e in manifest if self._would_lose_local_changes(e)]
+        if at_risk and not self.dry_run and not (confirm and confirm(at_risk)):
+            raise PullDeclined("Nothing was pulled.")
         results = [self._pull_file(entry["source"], Path(entry["dest"])) for entry in manifest]
+        for r in results:
+            if r.dest in at_risk and not r.error and not r.skipped:
+                r.resolved_by = "overwrites local changes"
         if not self.dry_run:
             self.state.save()
         return results + (self._env_results() if not patterns else [])
 
-    def status(self, patterns: list[str] | None = None) -> list[FileResult]:
-        """Report what sync would do for each file (or those matching `patterns`), changing nothing."""
+    def _would_lose_local_changes(self, entry: dict) -> bool:
+        """True if writing the repo's version over `entry` would lose content
+        that isn't in the repo: the file differs from it, and isn't simply the
+        copy that was last synced here."""
+        dest = Path(entry["dest"])
+        try:
+            abs_source = self.renderer.resolve_source(entry["source"])
+            if abs_source.is_dir():
+                repo_hash = sha256_dir(abs_source, self.include_binary)
+            elif self._is_skipped_binary(abs_source, dest):
+                return False
+            else:
+                repo_hash = sha256(self.renderer.render(entry["source"]))
+        except RenderError:
+            return False   # reported when pulling
+        disk_hash = hash_path(dest, self.include_binary)
+        if disk_hash is None or disk_hash == repo_hash:
+            return False
+        state = self.state.get(dest)
+        return disk_hash != (state.last_applied_hash if state else None)
+
+    def status(self, patterns: list[str] | None = None, fetch: bool = True,
+               with_diff: bool = False) -> list[FileResult]:
+        """
+        Report what sync would do for each file (or those matching
+        `patterns`), changing nothing. With `fetch`, changes waiting on the
+        remote are included, previewed like `sync --dry-run`. With
+        `with_diff`, each differing result carries a unified diff.
+        """
         old_dry = self.dry_run
         self.dry_run = True
         try:
-            manifest = self._select_entries(self.renderer.load_manifest(), patterns)
-            results = [self._process_entry(entry) for entry in manifest]
-            return results + (self._env_results() if not patterns else [])
+            if fetch:
+                with self._preview():
+                    return self._status(patterns, with_diff)
+            return self._status(patterns, with_diff)
         finally:
             self.dry_run = old_dry
+
+    def _status(self, patterns: list[str] | None, with_diff: bool) -> list[FileResult]:
+        manifest = self._select_entries(self.renderer.load_manifest(), patterns)
+        results = [self._process_entry(entry) for entry in manifest]
+        if with_diff:
+            for r in results:
+                if r.action != Action.NOTHING or r.skipped:
+                    r.diff = self.diff(r.source, r.dest)
+        return results + (self._env_results() if not patterns else [])
 
     def diff(self, source: str, dest: Path) -> list[str]:
         """
@@ -600,49 +655,42 @@ class Syncer:
                 selected.setdefault(i, manifest[i])
         return [selected[i] for i in sorted(selected)]
 
-    def remove(self, local: Path) -> FileResult:
+    def remove(self, patterns: list[str]) -> list[FileResult]:
         """
-        Stop tracking a file or directory.
+        Stop tracking files or directories (disk paths or quoted globs matched
+        against tracked paths, like push and pull).
 
-        Drops its manifest entry, deletes its source from the repo, forgets
-        its state, then commits and pushes. The file on disk is left untouched.
+        Drops their manifest entries, deletes their sources from the repo,
+        forgets their state, then commits and pushes once. Files on disk are
+        left untouched, and may already be gone.
         """
         branch = self.config.branch
-        dest = Path(os.path.abspath(local.expanduser()))
-
         manifest = self.renderer.load_manifest()
-        entry = next((e for e in manifest if Path(os.path.abspath(e["dest"])) == dest), None)
-        if entry is None:
-            if not dest.exists() and not dest.is_symlink():
-                raise ValueError(f"{dest} doesn't exist")
-            parent = next((e for e in manifest if dest.is_relative_to(e["dest"])), None)
-            if parent:
-                raise ValueError(
-                    f"{dest} is inside tracked directory {parent['dest']}; "
-                    "remove that directory instead"
-                )
-            raise ValueError(f"{dest} is not tracked")
-
-        source = entry["source"]
-        result = FileResult(dest=Path(entry["dest"]), source=source, action=Action.UNTRACK)
+        selected = self._select_entries(manifest, patterns)
+        results = [FileResult(dest=Path(e["dest"]), source=e["source"], action=Action.UNTRACK)
+                   for e in selected]
         if self.dry_run:
-            return result
+            return results
 
         self.repo.checkout(branch)
-        self._remove_manifest_entry(source)
+        remaining = [e for e in manifest if e not in selected]
+        for entry in selected:
+            self._remove_manifest_entry(entry["source"])
+            # Keep the source if another (hand-written) entry still points at it
+            if not any(e["source"] == entry["source"] for e in remaining):
+                p = self.config.repo_path / entry["source"]
+                if p.is_dir() and not p.is_symlink():
+                    shutil.rmtree(p)
+                elif p.exists() or p.is_symlink():
+                    p.unlink()
+            self.state.forget(Path(entry["dest"]))
 
-        # Keep the source if another (hand-written) entry still points at it
-        if not any(e["source"] == source for e in manifest if e is not entry):
-            p = self.config.repo_path / source
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)
-            elif p.exists() or p.is_symlink():
-                p.unlink()
-
-        self.state.forget(result.dest)
-        self._git_commit_and_push(branch, message=f"remove: {source}")
+        sources = [e["source"] for e in selected]
+        message = (f"remove: {sources[0]}" if len(sources) == 1
+                   else f"remove: {len(sources)} files\n\n" + "\n".join(sources))
+        self._git_commit_and_push(branch, message=message)
         self.state.save()
-        return result
+        return results
 
     def _remove_manifest_entry(self, source: str) -> None:
         """Remove the list item whose source matches, editing text to keep comments."""
@@ -863,15 +911,15 @@ class Syncer:
     def _resolve_conflict(self, source: str, dest: Path, rendered: bytes | None) -> FileResult:
         mode = self.config.conflict_resolution
 
-        if mode == "machine-wins":
-            return self._machine_wins(source, dest, "machine-wins")
+        if mode == "local-wins":
+            return self._local_wins(source, dest, "local-wins")
 
-        if mode == "git-wins":
+        if mode == "repo-wins":
             result = self._pull_file(source, dest, rendered)
-            result.resolved_by = "git-wins"
+            result.resolved_by = "repo-wins"
             return result
 
-        # last-write-wins: compare disk mtime vs when the repo side was
+        # newer-wins: compare disk mtime vs when the repo side was
         # committed. The clone's own mtime is useless: git rewrites the file
         # when it pulls, so it would always look newer than a local edit.
         repo_source = self.config.repo_path / source
@@ -881,15 +929,15 @@ class Syncer:
             repo_mtime = _mtime(repo_source, self.include_binary)
 
         if disk_mtime >= repo_mtime:
-            result = self._machine_wins(source, dest, "last-write-wins → machine")
+            result = self._local_wins(source, dest, "newer-wins → local")
         else:
             result = self._pull_file(source, dest, rendered)
-            result.resolved_by = "last-write-wins → git"
+            result.resolved_by = "newer-wins → repo"
 
         result.action = Action.CONFLICT
         return result
 
-    def _machine_wins(self, source: str, dest: Path, how: str) -> FileResult:
+    def _local_wins(self, source: str, dest: Path, how: str) -> FileResult:
         """Push the disk version, noting where the repo's version can be recovered."""
         previous = self.repo.last_commit_id(source)
         result = self._push_file(source, dest)
@@ -941,8 +989,15 @@ class Syncer:
 
         tmp = Path(tempfile.mkdtemp(prefix="dotsync-preview-"))
         worktree = tmp / "repo"
-        start = branch if self.repo.branch_exists(branch) else f"origin/{branch}"
-        if not _ref_exists(self.repo, start):
+        if self.repo.current_branch() == branch:
+            # Include uncommitted edits in the clone (e.g. a hand-edited
+            # vars.yaml), which a real sync would commit
+            start = self.repo.snapshot(tmp)
+        elif self.repo.branch_exists(branch):
+            start = branch
+        elif _ref_exists(self.repo, f"origin/{branch}"):
+            start = f"origin/{branch}"
+        else:
             start = "HEAD"
         self.repo._run("worktree", "add", "--detach", str(worktree), start)
         preview = _PreviewRepo(worktree)

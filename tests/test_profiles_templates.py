@@ -89,7 +89,7 @@ def test_local_edit_to_rendered_file_never_overwrites_the_template(sandbox):
     assert sandbox.remote_file("files/.gitconfig.j2") == "email={{ email }}\n"
     assert rendered.read_text().endswith("local=1\n")
 
-    sandbox.run("pull", "~/.gitconfig")
+    sandbox.run("pull", "~/.gitconfig", "--yes")
     assert rendered.read_text() == "email=a@example.com\n"
 
 

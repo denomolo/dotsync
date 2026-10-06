@@ -14,7 +14,7 @@ def joined(sandbox, fresh_machine):
     `install` against the same repo. Returns machine B's home."""
     home_a = fresh_machine("machine-a")
     remote = new_remote(sandbox)
-    sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"], input="n\n")
+    sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"], input="n\n")
     (home_a / ".bashrc").write_text("my bashrc\n")
     (home_a / ".vimrc").write_text("set nu\n")
     (home_a / ".config/kitty").mkdir(parents=True)
@@ -24,7 +24,7 @@ def joined(sandbox, fresh_machine):
     home_b = fresh_machine("machine-b")
     (home_b / ".bashrc").write_text("distro default\n")       # differs from the repo
     (home_b / ".vimrc").write_text("set nu\n")                # already identical
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote)], input="n\n")
     assert result.exit_code == 0, result.output
     sandbox.remote = remote
     return home_b
@@ -40,8 +40,7 @@ def test_install_changes_nothing_on_disk(sandbox, fresh_machine):
     (home / ".bashrc").write_text("mine\n")
     before = home_files(home)
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(new_remote(sandbox, "x.git")),
-                                                    "--init"], input="n\n")
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(new_remote(sandbox, "x.git")), "--new"], input="n\n")
 
     assert result.exit_code == 0, result.output
     assert home_files(home) == before
@@ -88,7 +87,7 @@ def test_pull_or_push_sets_a_file_up_then_sync_takes_over(sandbox, joined):
 
 
 def test_files_added_on_another_machine_wait_for_pull(sandbox, joined):
-    sandbox.run("pull")
+    sandbox.run("pull", "--yes")
     other = sandbox.other_machine()
     other.write("files/.tmux.conf", "set -g mouse on\n")
     manifest = (other.path / "manifest.yaml").read_text()

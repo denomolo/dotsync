@@ -4,6 +4,8 @@ import os
 import re
 import time
 
+import pytest
+
 from conftest import git
 
 
@@ -50,7 +52,7 @@ def test_last_write_wins_newer_local_edit_wins_and_is_pushed(sandbox):
     """Regression: the repo side used the clone's mtime, which `git pull`
     resets, so git always won and local edits were overwritten. And a
     machine-side win was left uncommitted in the clone."""
-    sandbox.write_config(conflict_resolution="last-write-wins")
+    sandbox.write_config(conflict_resolution="newer-wins")
     vimrc = track(sandbox, ".vimrc", "v1\n")
     now = int(time.time())
     other = sandbox.other_machine()
@@ -61,14 +63,14 @@ def test_last_write_wins_newer_local_edit_wins_and_is_pushed(sandbox):
 
     result = sandbox.run("sync")
 
-    assert "last-write-wins → machine" in result.output
+    assert "newer-wins → local" in result.output
     assert vimrc.read_text() == "local edit\n"
     assert sandbox.remote_file("files/.vimrc") == "local edit\n"
     assert sandbox.repo_dirty() == ""
 
 
 def test_last_write_wins_newer_remote_edit_wins(sandbox):
-    sandbox.write_config(conflict_resolution="last-write-wins")
+    sandbox.write_config(conflict_resolution="newer-wins")
     vimrc = track(sandbox, ".vimrc", "v1\n")
     now = int(time.time())
     vimrc.write_text("local edit\n")
@@ -79,7 +81,7 @@ def test_last_write_wins_newer_remote_edit_wins(sandbox):
 
     result = sandbox.run("sync")
 
-    assert "last-write-wins → git" in result.output
+    assert "newer-wins → repo" in result.output
     assert vimrc.read_text() == "remote edit\n"
 
 
@@ -94,12 +96,14 @@ def test_machine_wins_is_the_default_and_keeps_the_repo_version_in_history(sandb
 
     assert sandbox.remote_file("files/.vimrc") == "local edit\n"
     assert vimrc.read_text() == "local edit\n"
+    assert "local-wins; repo version kept in history at" in result.output
     sha = re.search(r"repo version kept in history at (\w+)", result.output).group(1)
     assert git(sandbox.repo, "show", f"{sha}:files/.vimrc") == "remote edit\n"
 
 
-def test_git_wins_policy(sandbox):
-    sandbox.write_config(conflict_resolution="git-wins")
+@pytest.mark.parametrize("policy", ["repo-wins", "git-wins"])   # old name still accepted
+def test_repo_wins_policy(sandbox, policy):
+    sandbox.write_config(conflict_resolution=policy)
     vimrc = track(sandbox, ".vimrc", "v1\n")
     other = sandbox.other_machine()
     other.write("files/.vimrc", "remote edit\n")

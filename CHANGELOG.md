@@ -4,6 +4,41 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+The interface review before 1.0: names, flags and formats below are what 1.0
+will keep stable.
+
+### Changed
+- **Breaking:** `dotsync install --repo-url REPO` is now `dotsync init REPO`.
+  It clones an existing dotsync repo or sets up an empty one; `--new` starts a
+  repo locally for a GitHub repo that doesn't exist yet. `--clone`/`--init` are
+  gone. `install` still works as a hidden alias with a notice.
+- **Breaking:** conflict policies are named `local-wins` (default),
+  `repo-wins` and `newer-wins`, matching the local/repo wording used
+  everywhere else. The old names `machine-wins`, `git-wins` and
+  `last-write-wins` keep working.
+- **Breaking:** `repo_url` is no longer written to or read from
+  `config.yaml`; the clone's git remote is what dotsync uses. Old configs
+  that still have it load fine.
+- `dotsync remove` takes several paths and quoted globs, in one commit, like
+  `add`, `push`, `pull` and `status`.
+- `dotsync status` fetches from GitHub and includes changes `sync` would
+  pull, previewed without merging (`--no-fetch` skips that; offline it warns
+  and shows the local view). It exits 0 even when some files can't be
+  synced; `--exit-code` exits with 3 when anything isn't in sync.
+- `dotsync pull` asks before overwriting local files with changes that
+  aren't in the repo (`--yes` skips the question; without a terminal it
+  refuses). Files that are only out of date are pulled without asking.
+- `sync`, `push` and `pull` exit 1 when any file fails. Documented exit
+  codes: 0 success, 1 error, 2 usage error, 3 `status --exit-code` pending.
+
+### Fixed
+- `--dry-run` and `status` previews ignored uncommitted edits in the clone
+  (e.g. a hand-edited `vars.yaml`), which a real sync commits; they now
+  include them.
+- The usage text claimed `dotsync` with no command runs `sync`; it shows help.
+
 ## [0.7.0] - 2026-10-06
 
 ### Added

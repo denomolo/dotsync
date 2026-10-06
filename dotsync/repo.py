@@ -14,6 +14,7 @@ because libgit2's merge support is incomplete.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -49,12 +50,14 @@ class Repo:
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
-    def _run(self, *args: str, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
+    def _run(self, *args: str, check: bool = True, capture: bool = True,
+             env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         result = subprocess.run(
             ["git", *args],
             cwd=self.path,
             text=True,
             capture_output=capture,
+            env={**os.environ, **env} if env else None,
         )
         if check and result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed:\n{result.stderr.strip()}")
@@ -182,6 +185,20 @@ class Repo:
             return False  # nothing staged
         self._run("commit", "-m", message)
         return True
+
+    def snapshot(self, scratch: Path) -> str:
+        """
+        Commit id of the working tree as it is now, uncommitted and untracked
+        files included, made with a scratch index so the real index, working
+        tree and branches are untouched. The commit is unreferenced.
+        """
+        env = {"GIT_INDEX_FILE": str(scratch / "index")}
+        self._run("read-tree", "HEAD", env=env)
+        self._run("add", "-A", env=env)
+        tree = self._run("write-tree", env=env).stdout.strip()
+        return self._run("-c", "user.name=dotsync", "-c", "user.email=dotsync@localhost",
+                         "commit-tree", tree, "-p", "HEAD", "-m", "dotsync preview",
+                         env=env).stdout.strip()
 
     def remote_branches(self) -> list[str]:
         """Branch names on origin, as of the last fetch or clone."""

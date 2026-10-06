@@ -36,7 +36,7 @@ def test_install_init_then_track_and_push(sandbox, fresh_machine):
     home = fresh_machine("machine-a")
     remote = new_remote(sandbox)
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"],
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"],
                                    input="n\n")
 
     assert result.exit_code == 0, result.output
@@ -52,7 +52,7 @@ def test_install_with_an_empty_remote_sets_it_up(sandbox, fresh_machine):
     home = fresh_machine("machine-a")
     remote = new_remote(sandbox)
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote)], input="n\n")
 
     assert result.exit_code == 0, result.output
     assert "repo is empty" in result.output
@@ -64,13 +64,13 @@ def test_install_with_an_empty_remote_sets_it_up(sandbox, fresh_machine):
 def test_second_machine_clones_and_checks_out(sandbox, fresh_machine):
     home_a = fresh_machine("machine-a")
     remote = new_remote(sandbox)
-    sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"], input="n\n")
+    sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"], input="n\n")
     (home_a / ".config/kitty").mkdir(parents=True)
     (home_a / ".config/kitty/kitty.conf").write_text("font_size 12\n")
     sandbox.run("add", "~/.config/kitty")
 
     home_b = fresh_machine("machine-b")
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote)], input="n\n")
     assert result.exit_code == 0, result.output
     # Regression (0.6.0): the remote's default branch is `main`, which doesn't
     # exist, so nothing got checked out and install wrongly re-initialised it
@@ -92,7 +92,7 @@ def test_install_refuses_a_repo_that_is_not_a_dotsync_repo(sandbox, fresh_machin
     git(work, "commit", "-qm", "init")
     git(work, "push", "-q", "origin", "HEAD:main")
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote)], input="n\n")
 
     assert result.exit_code != 0
     assert "doesn't look like a dotsync repo" in result.output
@@ -103,7 +103,7 @@ def test_install_does_not_enable_autosync_by_default(sandbox, fresh_machine):
     home = fresh_machine("machine-a")
     remote = new_remote(sandbox)
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"],
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"],
                                    input="\n")   # just press Enter at the prompt
 
     assert result.exit_code == 0, result.output
@@ -116,7 +116,7 @@ def test_install_can_opt_in_to_sync_at_login(sandbox, fresh_machine):
     home = fresh_machine("machine-a")
     remote = new_remote(sandbox)
 
-    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"],
+    result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"],
                                    input="y\n")
 
     assert result.exit_code == 0, result.output

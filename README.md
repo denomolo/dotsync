@@ -54,25 +54,23 @@ first commit itself.
 
 ### 3. Set up dotsync
 
-On your first machine, initialise the repo:
+On every machine, the first one included:
 
 ```sh
-dotsync install --repo-url <you>/dotfiles --init
+dotsync init <you>/dotfiles
 ```
 
-On every other machine, clone it instead (the default):
+The repo can be `owner/repo`, an HTTPS GitHub URL (both converted to SSH so
+your key is used) or any git URL. An empty repo is set up as a new dotsync
+repo; an existing one is cloned. If you haven't created the GitHub repo
+yet, `dotsync init <you>/dotfiles --new` starts one locally and pushes it
+on your first `dotsync add`.
 
-```sh
-dotsync install --repo-url <you>/dotfiles
-```
-
-`--repo-url` accepts `owner/repo`, an HTTPS GitHub URL (both converted to
-SSH so your key is used) or any git URL. `install` writes
-`~/.config/dotsync/config.yaml`, and asks whether to sync automatically at
-login (off unless you say yes; see [Automatic sync](#automatic-sync)). It
-never touches the files in your home directory. If the repo you point it at
-is still empty, `install` sets it up as a new dotsync repo even without
-`--init`. Use `--profile <name>` to start on a profile other than `base`.
+`init` writes `~/.config/dotsync/config.yaml` and the clone, and asks
+whether to sync automatically at login (off unless you say yes; see
+[Automatic sync](#automatic-sync)). It never touches the files in your home
+directory. Use `--profile <name>` to start on a profile other than `base`.
+(Before 0.8.0 this was `dotsync install --repo-url …`, which still works.)
 
 ## Quick start
 
@@ -87,13 +85,14 @@ dotsync status
 dotsync sync
 ```
 
-On another machine, after `dotsync install`, nothing is synced until you
+On another machine, after `dotsync init`, nothing is synced until you
 say so. `sync` only handles files that were already synced on that
 machine; everything else is listed by `status` and left alone:
 
 ```sh
 dotsync status                       # what's in the repo, and what differs here
-dotsync pull                         # take the repo's version of everything
+dotsync pull                         # take the repo's version of everything (asks before
+                                     # overwriting anything that differs here)
 dotsync pull ~/.config/kitty         # ...or just some files
 dotsync push ~/.bashrc               # keep this machine's version instead
 ```
@@ -106,14 +105,14 @@ the repo later: `sync` reports them until you `pull` them.
 
 | Command | What it does |
 | --- | --- |
-| `dotsync install` | First-time setup: clone (or `--init`) your dotfiles repo, write the config, optionally install the systemd service. |
+| `dotsync init REPO [--new]` | Set dotsync up on this machine: clone (or start) your dotfiles repo and write the config. |
 | `dotsync sync` | Two-way sync of every tracked file (see [How it works](#how-it-works)). |
-| `dotsync status [PATH...] [--diff]` | Show what `sync` would do for each file (or just `PATH`s), without changing anything; `--diff` shows how files differ. |
-| `dotsync push [PATH...]` | Force disk → repo, for every file or just `PATH`s. Commits and pushes. |
-| `dotsync pull [PATH...]` | Force repo → disk, for every file or just `PATH`s. |
+| `dotsync status [PATH...] [--diff]` | Show what `sync` would do for each file (or just `PATH`s), including changes waiting on GitHub, without changing anything; `--diff` shows how files differ. |
+| `dotsync push [PATH...]` | Copy this machine's version to the repo, for every file or just `PATH`s. Commits and pushes. |
+| `dotsync pull [PATH...] [--yes]` | Copy the repo's version to this machine, for every file or just `PATH`s; asks before overwriting local changes. |
 | `dotsync add PATH... [--remote R] [--allow-private]` | Start tracking files or directories from disk. |
 | `dotsync checkout REMOTE... [--local L] [--force]` | Start tracking files that are already in the repo, writing them to disk. |
-| `dotsync remove PATH` | Stop tracking a file or directory. The copy on disk is kept. |
+| `dotsync remove PATH...` | Stop tracking files or directories. The copies on disk are kept. |
 | `dotsync var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
 | `dotsync env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
 | `dotsync profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
@@ -195,9 +194,13 @@ dotsync status ~/.config/kitty --diff
 `--diff` prints a unified diff for each file that differs, from the repo's
 version (rendered, for templates) to this machine's: `-` lines are only in
 the repo, `+` lines only here. Directories are compared file by file, and
-binary files are only reported as different. `status` compares against the
-local clone and doesn't fetch; `dotsync sync --dry-run` also shows changes
-waiting on GitHub.
+binary files are only reported as different.
+
+`status` fetches from GitHub first, so it includes changes that `sync`
+would pull (previewed in a temporary copy, like `--dry-run`; nothing is
+merged). `--no-fetch` compares with the local clone only, and offline it
+warns and does that anyway. For scripts, `--exit-code` exits with 3 when
+anything isn't in sync and 0 when everything is.
 
 ### `push` and `pull`
 
@@ -209,7 +212,21 @@ dotsync pull '~/.config/foo/*'      # also restores files deleted from disk
 Without paths they act on every tracked file. Paths are files or
 directories on disk as listed in the manifest; quoted globs are matched
 against tracked paths rather than the filesystem. A file *inside* a tracked
-directory is rejected — use the directory.
+directory is rejected — use the directory. `remove` takes paths the same
+way.
+
+`pull` never silently loses local work: if a file has changes that aren't
+in the repo (edited since it was last synced, or a local file that was
+never synced, like a distribution's default `.bashrc`), `pull` lists those
+files and asks before overwriting them. Files that are simply out of date
+are pulled without asking. `--yes` skips the question; in a script without
+`--yes`, `pull` refuses and changes nothing.
+
+### Exit codes
+
+`0` success, `1` error (including any file a `sync`, `push` or `pull`
+couldn't handle), `2` invalid command-line usage, and `3` from
+`status --exit-code` when something isn't in sync.
 
 ## Automatic sync
 
@@ -415,16 +432,19 @@ isn't a conflict: `sync` leaves it alone until you `pull` or `push` it.)
 
 | Mode | Behaviour |
 | --- | --- |
-| `machine-wins` (default) | This machine's version wins and is pushed. |
-| `last-write-wins` | The newer side wins: the file's modification time on disk vs the time of the last commit that changed it in the repo. |
-| `git-wins` | The repo's version wins and overwrites the local file. |
+| `local-wins` (default) | This machine's version wins and is pushed. |
+| `newer-wins` | The newer side wins: the file's modification time on disk vs the time of the last commit that changed it in the repo. |
+| `repo-wins` | The repo's version wins and overwrites the local file. |
 
-`machine-wins` is the default because it never loses anything: the repo's
+(Before 0.8.0 these were `machine-wins`, `last-write-wins` and `git-wins`;
+the old names still work.)
+
+`local-wins` is the default because it never loses anything: the repo's
 version it replaces stays in git history, while a local file that gets
 overwritten is gone. The sync output shows where to find it:
 
 ```
-!  ~/.vimrc  [machine-wins; repo version kept in history at 3f2c1ab]
+!  ~/.vimrc  [local-wins; repo version kept in history at 3f2c1ab]
 ```
 ```sh
 git -C ~/.local/share/dotsync/repo show 3f2c1ab:files/.vimrc   # view it
@@ -432,7 +452,8 @@ dotsync push ~/.vimrc                                           # after restorin
 ```
 
 `dotsync push` and `dotsync pull` are one-off overrides equivalent to
-`machine-wins` and `git-wins`.
+`local-wins` and `repo-wins` (and `pull` asks before overwriting local
+changes).
 
 ## Configuration
 
@@ -440,9 +461,8 @@ dotsync push ~/.vimrc                                           # after restorin
 `DOTSYNC_CONFIG` environment variable):
 
 ```yaml
-repo_url: git@github.com:you/dotfiles.git
 profile: base                          # active profile
-conflict_resolution: machine-wins      # or last-write-wins / git-wins
+conflict_resolution: local-wins        # or newer-wins / repo-wins
 auto_push: true                        # push to GitHub after each commit
 include_binary: false                  # sync binary files too
 repo_path: ~/.local/share/dotsync/repo
@@ -559,4 +579,4 @@ flowchart LR
 *record*: nothing to copy, just remember the hash. *skip*: a file never
 synced on this machine (missing here, or different) is left alone until you
 `pull` or `push` it. *conflict*: settled by `conflict_resolution` (default
-`machine-wins`; see [Conflicts](#conflicts)).
+`local-wins`; see [Conflicts](#conflicts)).

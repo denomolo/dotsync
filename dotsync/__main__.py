@@ -2,14 +2,14 @@
 dotsync — bidirectional dotfile sync with profiles and templating.
 
 Usage:
-    dotsync install                  First-time setup
-    dotsync sync [--dry-run]         Bidirectional sync (default)
+    dotsync init <repo>              Set dotsync up on this machine
+    dotsync sync [--dry-run]         Bidirectional sync
     dotsync push [<path>...]         Force disk → git (all, or just <path>s)
     dotsync pull [<path>...]         Force git → disk (all, or just <path>s)
     dotsync status [<path>...]       Show per-file state (--diff for details)
     dotsync add <path>...            Track files/dirs, copying them to the repo (--remote R)
     dotsync checkout <remote>...     Track repo files, writing them to disk (--local L)
-    dotsync remove <local>           Stop tracking a file/dir (disk copy is kept)
+    dotsync remove <path>...         Stop tracking files/dirs (disk copies are kept)
     dotsync var list|set|unset       Manage template variables (vars.yaml)
     dotsync env list|set|unset|hook  Manage session environment variables
     dotsync profile list             List available profiles
@@ -37,11 +37,15 @@ from .config import Config, CONFIG_PATH, profile_branch
 from .lock import LockTimeout, repo_lock
 from .repo import Repo, GitError, normalize_github_url
 from .renderer import RenderError
-from .sync import NOT_SET_UP, Action, Syncer, find_private
+from .sync import NOT_SET_UP, Action, PullDeclined, Syncer, find_private
 from . import systemd
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+# Exit codes (part of the stable interface): 0 success, 1 error, 2 usage error
+# (from click), EXIT_PENDING from `status --exit-code` when something would change
+EXIT_PENDING = 3
 
 ACTION_SYMBOLS = {
     Action.NOTHING:  click.style("·", fg="bright_black"),
@@ -52,8 +56,9 @@ ACTION_SYMBOLS = {
 }
 
 
-def print_results(results, verbose: bool = False, pending: bool = False) -> None:
-    """Print per-file results and a summary; pending=True words it as not yet done."""
+def print_results(results, verbose: bool = False, pending: bool = False) -> int:
+    """Print per-file results and a summary (pending=True words it as not yet
+    done). Returns the number of errors."""
     errors = 0
     for r in results:
         sym = ACTION_SYMBOLS[r.action]
@@ -94,6 +99,7 @@ def print_results(results, verbose: bool = False, pending: bool = False) -> None
             "\n  Files not synced on this machine yet are left alone. Run `dotsync pull <path>`\n"
             "  to take the repo's version or `dotsync push <path>` to keep this machine's\n"
             "  (`dotsync pull` alone takes the repo's version of everything).", fg="bright_black"))
+    return errors
 
 
 def locked(command):
@@ -132,36 +138,65 @@ def cli():
     """dotsync — bidirectional dotfile sync with profiles and templating."""
 
 
-# ── install ────────────────────────────────────────────────────────────────────
+# ── init ───────────────────────────────────────────────────────────────────────
 
 @cli.command()
-@click.option("--repo-url", prompt="GitHub repo URL", help="SSH/HTTPS URL or owner/repo shorthand; HTTPS GitHub URLs are converted to SSH to use your existing key.")
-@click.option("--profile", default="base", show_default=True, help="Initial profile name.")
-@click.option("--clone/--init", default=True, help="Clone existing repo or init a new one.")
+@click.argument("repo")
+@click.option("--profile", default="base", show_default=True, help="Profile to use on this machine.")
+@click.option("--new", is_flag=True,
+              help="Start a new dotsync repo locally, for a GitHub repo that doesn't exist yet "
+                   "(it's pushed on your first `dotsync add`).")
+def init(repo: str, profile: str, new: bool):
+    """Set dotsync up on this machine with REPO, your dotfiles repo.
+
+    REPO is a git URL or a GitHub owner/repo shorthand; HTTPS GitHub URLs are
+    converted to SSH so your existing key is used. An existing dotsync repo is
+    cloned, an empty one is set up as a new dotsync repo. Only the clone and
+    ~/.config/dotsync/config.yaml are written: nothing in your home directory
+    changes until you pull, push or checkout.
+    """
+    _init(repo, profile, new)
+
+
+@cli.command(hidden=True)
+@click.option("--repo-url", prompt="GitHub repo URL")
+@click.option("--profile", default="base")
+@click.option("--clone/--init", default=True)
 def install(repo_url: str, profile: str, clone: bool):
-    """First-time setup: clone/init repo, write config, install systemd service."""
+    """Old name for `dotsync init` (before 0.8.0)."""
+    new_flag = "" if clone else " --new"
+    click.echo(click.style(f"`dotsync install` is now `dotsync init <repo>{new_flag}`.", fg="yellow"),
+               err=True)
+    _init(repo_url, profile, new=not clone)
+
+
+def _init(repo_url: str, profile: str, new: bool) -> None:
     normalized = normalize_github_url(repo_url)
     if normalized != repo_url:
         click.echo(f"Using SSH (existing GitHub key) instead of HTTPS: {normalized}")
         repo_url = normalized
-    cfg = Config(repo_url=repo_url, profile=profile)
+    cfg = Config(profile=profile)
 
     if cfg.repo_path.exists() and (cfg.repo_path / ".git").exists():
-        click.echo(f"Repo already exists at {cfg.repo_path}, skipping clone/init.")
-        repo = Repo(cfg.repo_path)
-    elif clone:
+        click.echo(f"Repo already exists at {cfg.repo_path}, keeping it.")
+    elif new:
+        click.echo(f"Starting a new dotsync repo at {cfg.repo_path} …")
+        Repo.init(cfg.repo_path, repo_url)
+    else:
         click.echo(f"Cloning {repo_url} → {cfg.repo_path} …")
         try:
             repo = Repo.clone(repo_url, cfg.repo_path)
         except GitError as e:
             click.echo(click.style(str(e), fg="red"), err=True)
+            click.echo("If the repo doesn't exist on GitHub yet, create it empty, or run "
+                       f"`dotsync init {repo_url} --new` to start locally.", err=True)
             sys.exit(1)
         branches = repo.remote_branches()
         if not branches:
             # A brand-new, empty GitHub repo: set it up instead of leaving a broken clone
             click.echo("The repo is empty, so setting it up as a new dotsync repo …")
             shutil.rmtree(cfg.repo_path)
-            repo = Repo.init(cfg.repo_path, repo_url)
+            Repo.init(cfg.repo_path, repo_url)
         else:
             # The repo's default branch may not be base (e.g. GitHub's `main`),
             # in which case git checked out the wrong branch or nothing at all
@@ -170,15 +205,12 @@ def install(repo_url: str, profile: str, clone: bool):
                 shutil.rmtree(cfg.repo_path)
                 click.echo(click.style(
                     f"{repo_url} has no `base` branch, so it doesn't look like a dotsync repo "
-                    f"(branches: {', '.join(branches)}). Point --repo-url at your dotfiles repo, "
+                    f"(branches: {', '.join(branches)}). Point dotsync at your dotfiles repo, "
                     "or at a new empty one.", fg="red"), err=True)
                 sys.exit(1)
             repo.checkout(target)
-    else:
-        click.echo(f"Initialising new repo at {cfg.repo_path} …")
-        repo = Repo.init(cfg.repo_path, repo_url)
 
-    cfg.write_default(repo_url, profile)
+    cfg.write_default(profile)
 
     if click.confirm("Sync automatically at login? (you can turn it on later with "
                      "`dotsync service install`)", default=False):
@@ -188,7 +220,7 @@ def install(repo_url: str, profile: str, clone: bool):
         except systemd.SystemdError as e:
             click.echo(click.style(f"Skipped the service: {e}", fg="yellow"), err=True)
 
-    click.echo(click.style("\ndotsync installed. Nothing on disk was changed. Next:", fg="green"))
+    click.echo(click.style("\ndotsync is set up. Nothing on disk was changed. Next:", fg="green"))
     click.echo("  dotsync add ~/.vimrc ~/.config/kitty   # start tracking files from this machine")
     click.echo("  dotsync status                         # joining an existing repo: see what's there,")
     click.echo("  dotsync pull                           # then take the repo's files (or `pull <path>`)")
@@ -207,7 +239,8 @@ def sync(dry_run: bool, verbose: bool):
     click.echo(f"{label}Syncing profile {click.style(cfg.profile, fg='cyan')} …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
     results = syncer.sync()
-    print_results(results, verbose=verbose, pending=dry_run)
+    if print_results(results, verbose=verbose, pending=dry_run):
+        sys.exit(1)
 
 
 # ── push ───────────────────────────────────────────────────────────────────────
@@ -218,7 +251,7 @@ def sync(dry_run: bool, verbose: bool):
 @click.option("-v", "--verbose", is_flag=True)
 @locked
 def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
-    """Force disk → git for all files, or only PATHS (machine-wins).
+    """Copy this machine's files to the repo: all of them, or only PATHS.
 
     PATHS are tracked files or directories on disk. Quoted glob patterns
     are matched against tracked paths, so '~/.config/foo/*' works even for
@@ -232,32 +265,55 @@ def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=verbose or bool(paths), pending=dry_run)
+    if print_results(results, verbose=verbose or bool(paths), pending=dry_run):
+        sys.exit(1)
 
 
 # ── pull ───────────────────────────────────────────────────────────────────────
 
 @cli.command()
 @click.argument("paths", nargs=-1)
+@click.option("-y", "--yes", is_flag=True, help="Overwrite local changes without asking.")
 @click.option("--dry-run", is_flag=True)
 @click.option("-v", "--verbose", is_flag=True)
 @locked
-def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
-    """Force git → disk for all files, or only PATHS (git-wins).
+def pull(paths: tuple[str, ...], yes: bool, dry_run: bool, verbose: bool):
+    """Copy the repo's files to this machine: all of them, or only PATHS.
 
     PATHS are tracked files or directories on disk. Quoted glob patterns
     are matched against tracked paths, so '~/.config/foo/*' works even for
-    files missing from disk.
+    files missing from disk. If this would overwrite local changes that
+    aren't in the repo, pull lists those files and asks first (--yes skips
+    the question).
     """
     cfg = load_config_or_exit()
     click.echo(f"Pulling repo → disk (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
+
+    def confirm(at_risk: list[Path]) -> bool:
+        if yes:
+            return True
+        click.echo(click.style("These local files have changes that aren't in the repo, and "
+                               "pulling overwrites them:", fg="yellow"))
+        for dest in at_risk:
+            click.echo("  " + str(dest).replace(str(Path.home()), "~", 1))
+        click.echo("(`dotsync status --diff` shows the changes; `dotsync push <path>` keeps one.)")
+        try:
+            return click.confirm("Overwrite them?", default=False)
+        except click.Abort:
+            click.echo()
+            return False
+
     try:
-        results = syncer.pull_all(list(paths))
+        results = syncer.pull_all(list(paths), confirm=confirm)
+    except PullDeclined as e:
+        click.echo(click.style(f"{e} Run with --yes to overwrite without asking.", fg="red"), err=True)
+        sys.exit(1)
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results(results, verbose=verbose or bool(paths), pending=dry_run)
+    if print_results(results, verbose=verbose or bool(paths), pending=dry_run):
+        sys.exit(1)
 
 
 # ── status ─────────────────────────────────────────────────────────────────────
@@ -265,27 +321,35 @@ def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
 @cli.command()
 @click.argument("paths", nargs=-1)
 @click.option("--diff", "show_diff", is_flag=True, help="Show how each differing file differs.")
+@click.option("--no-fetch", is_flag=True, help="Don't check the remote; compare with the local clone only.")
+@click.option("--exit-code", is_flag=True,
+              help=f"Exit with {EXIT_PENDING} if anything isn't in sync (0 if all is).")
 @locked
-def status(paths: tuple[str, ...], show_diff: bool):
+def status(paths: tuple[str, ...], show_diff: bool, no_fetch: bool, exit_code: bool):
     """Show what `sync` would do for each file, without changing anything.
 
-    PATHS limits it to those tracked files or directories (quoted globs are
-    matched against tracked paths). --diff also shows how each differing
-    file differs: `-` lines are the repo's version, `+` lines this machine's.
+    Changes waiting on GitHub are fetched and included (--no-fetch skips
+    that). PATHS limits it to those tracked files or directories (quoted
+    globs are matched against tracked paths). --diff also shows how each
+    differing file differs: `-` lines are the repo's version, `+` lines this
+    machine's.
     """
     cfg = load_config_or_exit()
     click.echo(f"Status (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=True)
     try:
-        results = syncer.status(list(paths))
+        results = syncer.status(list(paths), fetch=not no_fetch, with_diff=show_diff)
     except ValueError as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
     print_results(results, verbose=True, pending=True)
-    if show_diff:
-        for r in results:
-            if r.source.startswith("files/") and (r.action != Action.NOTHING or r.skipped):
-                print_diff(syncer.diff(r.source, r.dest))
+    for r in results:
+        if r.diff:
+            print_diff(r.diff)
+    # Files that sync couldn't handle are reported, not a failure of status itself
+    if exit_code and any(r.action != Action.NOTHING or r.skipped == NOT_SET_UP or r.error
+                         for r in results):
+        sys.exit(EXIT_PENDING)
 
 
 def print_diff(lines: list[str]) -> None:
@@ -414,26 +478,27 @@ def checkout(remotes: tuple[str, ...], local: Path | None, force: bool, dry_run:
 # ── remove ─────────────────────────────────────────────────────────────────────
 
 @cli.command()
-@click.argument("local", type=click.Path(path_type=Path))
+@click.argument("paths", nargs=-1, required=True)
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
 @locked
-def remove(local: Path, dry_run: bool):
-    """Stop tracking LOCAL (a file or directory).
+def remove(paths: tuple[str, ...], dry_run: bool):
+    """Stop tracking PATHS (files or directories).
 
-    Removes its manifest entry and its copy in the repo. The file on disk
-    is left untouched. LOCAL may already be deleted from disk as long as
-    it is still tracked.
+    Removes their manifest entries and their copies in the repo, in one
+    commit. The files on disk are left untouched, and may already be
+    deleted. Quoted globs are matched against tracked paths.
     """
     cfg = load_config_or_exit()
     syncer = Syncer(cfg, dry_run=dry_run)
     try:
-        result = syncer.remove(local)
+        results = syncer.remove(list(paths))
     except (ValueError, GitError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    print_results([result], verbose=True, pending=dry_run)
+    print_results(results, verbose=True, pending=dry_run)
     verb = "Would stop tracking" if dry_run else "No longer tracking"
-    click.echo(f"  {verb} {click.style(result.source, fg='cyan')} (disk copy kept)")
+    for r in results:
+        click.echo(f"  {verb} {click.style(r.source, fg='cyan')} (disk copy kept)")
 
 
 # ── var ────────────────────────────────────────────────────────────────────────

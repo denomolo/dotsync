@@ -13,7 +13,11 @@ import yaml
 
 CONFIG_PATH = Path(os.environ.get("DOTSYNC_CONFIG", "~/.config/dotsync/config.yaml")).expanduser()
 
-ConflictResolution = Literal["last-write-wins", "machine-wins", "git-wins"]
+ConflictResolution = Literal["local-wins", "repo-wins", "newer-wins"]
+
+# Names used before 0.8.0, still accepted
+POLICY_ALIASES = {"machine-wins": "local-wins", "git-wins": "repo-wins",
+                  "last-write-wins": "newer-wins"}
 
 
 def profile_branch(profile: str) -> str:
@@ -23,9 +27,8 @@ def profile_branch(profile: str) -> str:
 
 @dataclass
 class Config:
-    repo_url: str
     profile: str = "base"
-    conflict_resolution: ConflictResolution = "machine-wins"
+    conflict_resolution: ConflictResolution = "local-wins"
     auto_push: bool = True
     include_binary: bool = False   # sync binary files too (default: text only)
     repo_path: Path = field(default_factory=lambda: Path("~/.local/share/dotsync/repo").expanduser())
@@ -40,20 +43,22 @@ class Config:
         if not CONFIG_PATH.exists():
             raise FileNotFoundError(
                 f"Config not found at {CONFIG_PATH}.\n"
-                "Run `dotsync install` to create an initial config."
+                "Run `dotsync init <repo>` to set dotsync up."
             )
         with CONFIG_PATH.open() as f:
             raw = yaml.safe_load(f) or {}
 
         repo_path = Path(raw.get("repo_path", "~/.local/share/dotsync/repo")).expanduser()
         state_path = Path(raw.get("state_path", "~/.local/state/dotsync/state.json")).expanduser()
-        conflict = raw.get("conflict_resolution", "machine-wins")
+        conflict = raw.get("conflict_resolution", "local-wins")
+        conflict = POLICY_ALIASES.get(conflict, conflict)
+        if conflict not in ("local-wins", "repo-wins", "newer-wins"):
+            raise ValueError(f"Invalid conflict_resolution {conflict!r} in {CONFIG_PATH}: "
+                             "use local-wins, repo-wins or newer-wins")
 
-        if conflict not in ("last-write-wins", "machine-wins", "git-wins"):
-            raise ValueError(f"Invalid conflict_resolution: {conflict!r}")
-
+        # repo_url (written before 0.8.0) is ignored: the clone's git remote is
+        # what dotsync pushes to
         return cls(
-            repo_url=raw["repo_url"],
             profile=raw.get("profile", "base"),
             conflict_resolution=conflict,
             auto_push=raw.get("auto_push", True),
@@ -62,12 +67,11 @@ class Config:
             state_path=state_path,
         )
 
-    def write_default(self, repo_url: str, profile: str) -> None:
+    def write_default(self, profile: str) -> None:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "repo_url": repo_url,
             "profile": profile,
-            "conflict_resolution": "machine-wins",
+            "conflict_resolution": "local-wins",
             "auto_push": True,
             "include_binary": False,
             "repo_path": str(self.repo_path),
