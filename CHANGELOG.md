@@ -1,8 +1,28 @@
 # Changelog
 
-All notable changes to dotsync are documented here. Versions follow
+All notable changes to syncdot (called dotsync up to 0.8.0) are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
+
+## [Unreleased]
+
+### Changed
+- **Breaking:** dotsync is now **syncdot**, to stop colliding with several
+  other dotfile tools named dotsync (including an established GitHub project
+  and the `dotsync` packages on the AUR, crates.io and npm). The command,
+  Python package, GitHub repo (`denomolo/syncdot`; the old URL redirects),
+  config, data and state directories (`~/.config/syncdot`,
+  `~/.local/share/syncdot`, `~/.local/state/syncdot`), the `SYNCDOT_CONFIG`
+  variable and the login service (`syncdot.service`) are all renamed.
+  The first `syncdot` command moves an existing dotsync setup over
+  automatically; `service install` replaces the old `dotsync.service`.
+- **Licence:** syncdot is now released under the MIT License. Versions up to
+  0.8.0 remain under the GPL 3.0 or later.
+
+### Added
+- Package metadata for PyPI, and a GitHub Actions workflow that publishes
+  full (non-pre-release) GitHub releases to PyPI with Trusted Publishing,
+  starting with 1.0.0.
 
 ## [0.8.0] - 2026-10-06
 

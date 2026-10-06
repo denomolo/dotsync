@@ -1,9 +1,9 @@
 """
-Shared fixtures: every test gets an isolated dotsync world.
+Shared fixtures: every test gets an isolated syncdot world.
 
   remote.git   bare repo standing in for GitHub
   home/        fake $HOME the files live in
-  repo/        dotsync's local clone (initialised like `dotsync install --init`)
+  repo/        syncdot's local clone (initialised like `syncdot install --init`)
   bin/         first on $PATH; holds a fake `systemctl` that only logs its args
 
 Nothing touches the real home directory, dotfiles repo or systemd session.
@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import dotsync.__main__ as cli_module
-import dotsync.config as config_module
-from dotsync.__main__ import cli
-from dotsync.repo import Repo
+import syncdot.__main__ as cli_module
+import syncdot.config as config_module
+from syncdot.__main__ import cli
+from syncdot.repo import Repo
 
 
 def git(cwd: Path, *args: str, env: dict | None = None) -> str:
@@ -64,7 +64,7 @@ class Sandbox:
     runner: CliRunner = field(default_factory=CliRunner)
 
     def run(self, *args: str, ok: bool | None = True):
-        """Run the dotsync CLI. ok=True expects exit 0, False expects failure, None checks nothing."""
+        """Run the syncdot CLI. ok=True expects exit 0, False expects failure, None checks nothing."""
         result = self.runner.invoke(cli, list(args), catch_exceptions=False)
         if ok is True:
             assert result.exit_code == 0, result.output

@@ -3,7 +3,7 @@ themselves; pull, push and checkout do, explicitly."""
 
 import pytest
 
-import dotsync.__main__ as cli_module
+import syncdot.__main__ as cli_module
 from conftest import git
 from test_install_service import fresh_machine, new_remote  # noqa: F401  (fixture)
 
@@ -32,7 +32,7 @@ def joined(sandbox, fresh_machine):
 
 def home_files(home) -> dict:
     return {str(p.relative_to(home)): p.read_text() for p in home.rglob("*")
-            if p.is_file() and ".local/share/dotsync" not in str(p) and ".config/dotsync" not in str(p)}
+            if p.is_file() and ".local/share/syncdot" not in str(p) and ".config/syncdot" not in str(p)}
 
 
 def test_install_changes_nothing_on_disk(sandbox, fresh_machine):
@@ -56,7 +56,7 @@ def test_sync_leaves_never_synced_files_alone(sandbox, joined):
     assert not (joined / ".config/kitty").exists()                       # not created
     assert git(sandbox.remote, "rev-parse", "base") == before_remote     # nothing pushed
     assert result.output.count("[skipped: not synced on this machine yet]") == 2
-    assert "`dotsync pull <path>`" in result.output
+    assert "`syncdot pull <path>`" in result.output
 
 
 def test_identical_files_start_syncing_without_any_change(sandbox, joined):

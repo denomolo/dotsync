@@ -1,5 +1,5 @@
 """
-config.py — Load and validate ~/.config/dotsync/config.yaml
+config.py — Load and validate ~/.config/syncdot/config.yaml
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import Literal
 
 import yaml
 
-CONFIG_PATH = Path(os.environ.get("DOTSYNC_CONFIG", "~/.config/dotsync/config.yaml")).expanduser()
+CONFIG_PATH = Path(os.environ.get("SYNCDOT_CONFIG", "~/.config/syncdot/config.yaml")).expanduser()
 
 ConflictResolution = Literal["local-wins", "repo-wins", "newer-wins"]
 
@@ -31,8 +31,8 @@ class Config:
     conflict_resolution: ConflictResolution = "local-wins"
     auto_push: bool = True
     include_binary: bool = False   # sync binary files too (default: text only)
-    repo_path: Path = field(default_factory=lambda: Path("~/.local/share/dotsync/repo").expanduser())
-    state_path: Path = field(default_factory=lambda: Path("~/.local/state/dotsync/state.json").expanduser())
+    repo_path: Path = field(default_factory=lambda: Path("~/.local/share/syncdot/repo").expanduser())
+    state_path: Path = field(default_factory=lambda: Path("~/.local/state/syncdot/state.json").expanduser())
 
     @property
     def branch(self) -> str:
@@ -43,13 +43,13 @@ class Config:
         if not CONFIG_PATH.exists():
             raise FileNotFoundError(
                 f"Config not found at {CONFIG_PATH}.\n"
-                "Run `dotsync init <repo>` to set dotsync up."
+                "Run `syncdot init <repo>` to set syncdot up."
             )
         with CONFIG_PATH.open() as f:
             raw = yaml.safe_load(f) or {}
 
-        repo_path = Path(raw.get("repo_path", "~/.local/share/dotsync/repo")).expanduser()
-        state_path = Path(raw.get("state_path", "~/.local/state/dotsync/state.json")).expanduser()
+        repo_path = Path(raw.get("repo_path", "~/.local/share/syncdot/repo")).expanduser()
+        state_path = Path(raw.get("state_path", "~/.local/state/syncdot/state.json")).expanduser()
         conflict = raw.get("conflict_resolution", "local-wins")
         conflict = POLICY_ALIASES.get(conflict, conflict)
         if conflict not in ("local-wins", "repo-wins", "newer-wins"):
@@ -57,7 +57,7 @@ class Config:
                              "use local-wins, repo-wins or newer-wins")
 
         # repo_url (written before 0.8.0) is ignored: the clone's git remote is
-        # what dotsync pushes to
+        # what syncdot pushes to
         return cls(
             profile=raw.get("profile", "base"),
             conflict_resolution=conflict,

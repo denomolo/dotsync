@@ -1,4 +1,4 @@
-"""dotsync status [PATH...] [--diff]."""
+"""syncdot status [PATH...] [--diff]."""
 
 import os
 

@@ -1,11 +1,23 @@
-# dotsync
+# syncdot
+Author's Note:
+I wanted to play a bit with Claude and see what it could do. Thought of building something that I could use on a daily basis. I've been a fan of chezmoi for a while but remembering the sync model and the syntax every time that I just wanted to backup or pull a file made me abandon it long ago.
+
+I built this with Claude code using these self imposed rules:
+* I decide on syntax.
+* I decide on the logic.
+* Python is the language of choice.
+* No handling of secrets or binary files.
+* Keep it as simple as possible.
+
+Let me know if you like it.
+##
 
 Bidirectional dotfile sync backed by a git repo, with per-machine profiles
 (git branches) and Jinja2 templating.
 
-Edit a dotfile on any machine and `dotsync sync` pushes it to your dotfiles
+Edit a dotfile on any machine and `syncdot sync` pushes it to your dotfiles
 repo; edit it in the repo (or on another machine) and the next sync pulls it
-down. dotsync remembers what it last wrote to each file, so it can tell
+down. syncdot remembers what it last wrote to each file, so it can tell
 which side changed and only asks a conflict policy to decide when both did.
 
 ## Contents
@@ -29,72 +41,78 @@ which side changed and only asks a conflict policy to decide when both did.
 ## Install
 
 **Requirements:** Python 3.11+, [pipx](https://pipx.pypa.io/), git, and an
-SSH key on your GitHub account (`ssh -T git@github.com` should greet you).
+SSH key on your GitHub account for pushing to your dotfiles repo
+(`ssh -T git@github.com` should greet you).
 The optional auto-sync service needs systemd.
 
 ### 1. Install the tool
 
-This repository is private, so you need collaborator access. Install a
-tagged release straight from GitHub:
-
 ```sh
-pipx install git+ssh://git@github.com/denomolo/dotsync.git@v0.8.0
-dotsync --version
+pipx install git+https://github.com/denomolo/syncdot.git@v0.9.0
+syncdot --version
 ```
 
-To upgrade later, run the same command with `--force` and the new tag. To
-install from a local checkout instead: `pipx install --force .`
+To upgrade later, run the same command with `--force` and the new tag. From
+1.0.0 on, syncdot is on PyPI: `pipx install syncdot`, then `pipx upgrade
+syncdot`. To install from a local checkout instead: `pipx install --force .`
+
+**Coming from dotsync?** syncdot was called dotsync up to 0.8.0. Install
+syncdot, run any `syncdot` command, and your config, clone and state move
+to syncdot's locations automatically (`~/.config/syncdot`,
+`~/.local/share/syncdot`, `~/.local/state/syncdot`); then
+`pipx uninstall dotsync`. If you used the login service, run
+`syncdot service install` once to replace it.
 
 ### 2. Create your dotfiles repo
 
 Your dotfiles live in **your own** repo, separate from this one. Create a
 new private repo on GitHub (e.g. `<you>/dotfiles`) and leave it **completely
-empty** — no README, license or .gitignore — because dotsync creates the
+empty** — no README, license or .gitignore — because syncdot creates the
 first commit itself.
 
-### 3. Set up dotsync
+### 3. Set up syncdot
 
 On every machine, the first one included:
 
 ```sh
-dotsync init <you>/dotfiles
+syncdot init <you>/dotfiles
 ```
 
 The repo can be `owner/repo`, an HTTPS GitHub URL (both converted to SSH so
-your key is used) or any git URL. An empty repo is set up as a new dotsync
+your key is used) or any git URL. An empty repo is set up as a new syncdot
 repo; an existing one is cloned. If you haven't created the GitHub repo
-yet, `dotsync init <you>/dotfiles --new` starts one locally and pushes it
-on your first `dotsync add`.
+yet, `syncdot init <you>/dotfiles --new` starts one locally and pushes it
+on your first `syncdot add`.
 
-`init` writes `~/.config/dotsync/config.yaml` and the clone, and asks
+`init` writes `~/.config/syncdot/config.yaml` and the clone, and asks
 whether to sync automatically at login (off unless you say yes; see
 [Automatic sync](#automatic-sync)). It never touches the files in your home
 directory. Use `--profile <name>` to start on a profile other than `base`.
-(Before 0.8.0 this was `dotsync install --repo-url …`, which still works.)
+(Before 0.8.0 this was `install --repo-url …`, which still works.)
 
 ## Quick start
 
 ```sh
 # Start tracking files (one commit, pushed to GitHub)
-dotsync add ~/.vimrc ~/.bashrc ~/.config/kitty
+syncdot add ~/.vimrc ~/.bashrc ~/.config/kitty
 
 # See what changed
-dotsync status
+syncdot status
 
 # Sync both ways
-dotsync sync
+syncdot sync
 ```
 
-On another machine, after `dotsync init`, nothing is synced until you
+On another machine, after `syncdot init`, nothing is synced until you
 say so. `sync` only handles files that were already synced on that
 machine; everything else is listed by `status` and left alone:
 
 ```sh
-dotsync status                       # what's in the repo, and what differs here
-dotsync pull                         # take the repo's version of everything (asks before
+syncdot status                       # what's in the repo, and what differs here
+syncdot pull                         # take the repo's version of everything (asks before
                                      # overwriting anything that differs here)
-dotsync pull ~/.config/kitty         # ...or just some files
-dotsync push ~/.bashrc               # keep this machine's version instead
+syncdot pull ~/.config/kitty         # ...or just some files
+syncdot push ~/.bashrc               # keep this machine's version instead
 ```
 
 After a file has been pulled or pushed once on a machine, `sync` keeps it
@@ -105,19 +123,19 @@ the repo later: `sync` reports them until you `pull` them.
 
 | Command | What it does |
 | --- | --- |
-| `dotsync init REPO [--new]` | Set dotsync up on this machine: clone (or start) your dotfiles repo and write the config. |
-| `dotsync sync` | Two-way sync of every tracked file (see [How it works](#how-it-works)). |
-| `dotsync status [PATH...] [--diff]` | Show what `sync` would do for each file (or just `PATH`s), including changes waiting on GitHub, without changing anything; `--diff` shows how files differ. |
-| `dotsync push [PATH...]` | Copy this machine's version to the repo, for every file or just `PATH`s. Commits and pushes. |
-| `dotsync pull [PATH...] [--yes]` | Copy the repo's version to this machine, for every file or just `PATH`s; asks before overwriting local changes. |
-| `dotsync add PATH... [--remote R] [--allow-private]` | Start tracking files or directories from disk. |
-| `dotsync checkout REMOTE... [--local L] [--force]` | Start tracking files that are already in the repo, writing them to disk. |
-| `dotsync remove PATH...` | Stop tracking files or directories. The copies on disk are kept. |
-| `dotsync var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
-| `dotsync env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
-| `dotsync profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
-| `dotsync service install \| uninstall \| status` | Opt in to syncing automatically at login ([details](#automatic-sync)). |
-| `dotsync --version` | Print the installed version. |
+| `syncdot init REPO [--new]` | Set syncdot up on this machine: clone (or start) your dotfiles repo and write the config. |
+| `syncdot sync` | Two-way sync of every tracked file (see [How it works](#how-it-works)). |
+| `syncdot status [PATH...] [--diff]` | Show what `sync` would do for each file (or just `PATH`s), including changes waiting on GitHub, without changing anything; `--diff` shows how files differ. |
+| `syncdot push [PATH...]` | Copy this machine's version to the repo, for every file or just `PATH`s. Commits and pushes. |
+| `syncdot pull [PATH...] [--yes]` | Copy the repo's version to this machine, for every file or just `PATH`s; asks before overwriting local changes. |
+| `syncdot add PATH... [--remote R] [--allow-private]` | Start tracking files or directories from disk. |
+| `syncdot checkout REMOTE... [--local L] [--force]` | Start tracking files that are already in the repo, writing them to disk. |
+| `syncdot remove PATH...` | Stop tracking files or directories. The copies on disk are kept. |
+| `syncdot var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
+| `syncdot env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
+| `syncdot profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
+| `syncdot service install \| uninstall \| status` | Opt in to syncing automatically at login ([details](#automatic-sync)). |
+| `syncdot --version` | Print the installed version. |
 
 `sync`, `push`, `pull`, `add`, `checkout`, `remove`, `var set|unset` and
 `env set|unset` accept `--dry-run` to show what would happen without
@@ -127,7 +145,7 @@ files, the local clone's branches and its working tree stay exactly as
 they were. `sync`, `push` and `pull` accept `-v` to list unchanged files
 too.
 
-Only one dotsync runs at a time. If you start a command while another one
+Only one syncdot runs at a time. If you start a command while another one
 is running (for example the background `sync`), it waits for it to
 finish, and gives up after two minutes.
 
@@ -145,10 +163,10 @@ finish, and gives up after two minutes.
 ### `add`
 
 ```sh
-dotsync add ~/.vimrc ~/.config/environment.d
-dotsync add ~/.config/foo/*.conf
-dotsync add '~/.config/foo/*.conf'          # quoted: dotsync expands it
-dotsync add /etc/hosts --remote system/      # outside ~ needs --remote
+syncdot add ~/.vimrc ~/.config/environment.d
+syncdot add ~/.config/foo/*.conf
+syncdot add '~/.config/foo/*.conf'          # quoted: syncdot expands it
+syncdot add /etc/hosts --remote system/      # outside ~ needs --remote
 ```
 
 - Each path is stored under `files/` at its location relative to your home
@@ -171,10 +189,10 @@ dotsync add /etc/hosts --remote system/      # outside ~ needs --remote
 The reverse of `add`, for setting up a new machine from a populated repo.
 
 ```sh
-dotsync checkout .vimrc                              # files/.vimrc → ~/.vimrc
-dotsync checkout '.config/*'                         # glob, matched in the repo
-dotsync checkout nvim --local ~/.config/nvim         # choose where it goes
-dotsync checkout .bashrc --force                     # overwrite a different local file
+syncdot checkout .vimrc                              # files/.vimrc → ~/.vimrc
+syncdot checkout '.config/*'                         # glob, matched in the repo
+syncdot checkout nvim --local ~/.config/nvim         # choose where it goes
+syncdot checkout .bashrc --force                     # overwrite a different local file
 ```
 
 - `REMOTE` paths are relative to `files/` (a leading `files/` is accepted).
@@ -186,9 +204,9 @@ dotsync checkout .bashrc --force                     # overwrite a different loc
 ### `status`
 
 ```sh
-dotsync status                       # every tracked file
-dotsync status ~/.vimrc              # just one (or several, or a quoted glob)
-dotsync status ~/.config/kitty --diff
+syncdot status                       # every tracked file
+syncdot status ~/.vimrc              # just one (or several, or a quoted glob)
+syncdot status ~/.config/kitty --diff
 ```
 
 `--diff` prints a unified diff for each file that differs, from the repo's
@@ -205,8 +223,8 @@ anything isn't in sync and 0 when everything is.
 ### `push` and `pull`
 
 ```sh
-dotsync push ~/.config/starship.toml
-dotsync pull '~/.config/foo/*'      # also restores files deleted from disk
+syncdot push ~/.config/starship.toml
+syncdot pull '~/.config/foo/*'      # also restores files deleted from disk
 ```
 
 Without paths they act on every tracked file. Paths are files or
@@ -233,16 +251,16 @@ couldn't handle), `2` invalid command-line usage, and `3` from
 Automatic sync is off unless you opt in, and then it only runs at login:
 
 ```sh
-dotsync service install      # sync at every login, after the network is up
-dotsync service status
-dotsync service uninstall
+syncdot service install      # sync at every login, after the network is up
+syncdot service status
+syncdot service uninstall
 ```
 
-This installs a systemd user unit, `~/.config/systemd/user/dotsync.service`,
-that runs `dotsync sync` once per login; it doesn't run a sync right away.
-Output goes to the journal: `journalctl --user -u dotsync`. Without systemd,
-run `dotsync sync` from your shell's startup files instead. (dotsync 0.6.0
-also installed an hourly `dotsync.timer`; `service install` and `uninstall`
+This installs a systemd user unit, `~/.config/systemd/user/syncdot.service`,
+that runs `syncdot sync` once per login; it doesn't run a sync right away.
+Output goes to the journal: `journalctl --user -u syncdot`. Without systemd,
+run `syncdot sync` from your shell's startup files instead. (syncdot 0.6.0
+also installed an hourly `syncdot.timer`; `service install` and `uninstall`
 remove it.)
 
 ## Dotfiles repo layout
@@ -295,10 +313,10 @@ gitGraph
 ```
 
 ```sh
-dotsync profile new laptop     # create profiles/laptop from base
-dotsync profile set laptop     # make it this machine's active profile
-dotsync pull                   # apply it to disk
-dotsync profile list           # base, laptop ← active
+syncdot profile new laptop     # create profiles/laptop from base
+syncdot profile set laptop     # make it this machine's active profile
+syncdot pull                   # apply it to disk
+syncdot profile list           # base, laptop ← active
 ```
 
 - To change a file or variable for one profile, edit it on that profile's
@@ -306,7 +324,7 @@ dotsync profile list           # base, laptop ← active
 - Every `sync` (and `pull`/`checkout`) merges `base` into the active profile
   branch, so shared changes reach every profile.
 - If the merge conflicts (both `base` and the profile changed the same
-  lines), dotsync aborts it, warns you with the `git merge` command to run
+  lines), syncdot aborts it, warns you with the `git merge` command to run
   in the repo clone, and leaves the branch and your files untouched until
   you resolve it.
 
@@ -334,12 +352,12 @@ Directories are always copied verbatim, never rendered.
 
 ### Variables
 
-Manage `vars.yaml` with `dotsync var` instead of editing it in the repo:
+Manage `vars.yaml` with `syncdot var` instead of editing it in the repo:
 
 ```sh
-dotsync var set fullname="Ariel Shatil" email=ariel@example.com
-dotsync var list
-dotsync var unset editor
+syncdot var set fullname="Ariel Shatil" email=ariel@example.com
+syncdot var list
+syncdot var unset editor
 ```
 
 - `set` and `unset` change `vars.yaml` on the **active profile's branch**,
@@ -359,22 +377,22 @@ dotsync var unset editor
 Templated files only flow **repo → disk**. If you edit the rendered file on
 disk (e.g. `~/.gitconfig`), `sync` and `push` report an error instead of
 copying it over the template, and leave both sides alone. Make the change in
-the `.j2` file in the repo, or run `dotsync pull <path>` to discard the
+the `.j2` file in the repo, or run `syncdot pull <path>` to discard the
 local edit. See
 [`dot_gitconfig.j2.example`](dot_gitconfig.j2.example).
 
 ## Environment variables
 
-`dotsync env` manages environment variables for your session, such as
+`syncdot env` manages environment variables for your session, such as
 `EDITOR` or `GIT_AUTHOR_EMAIL`. They live in their own `env:` section of
 `vars.yaml`, separate from template variables, so only what you list there
 is exported:
 
 ```sh
-dotsync env set EDITOR=nvim BROWSER=firefox
-dotsync env set GIT_AUTHOR_EMAIL='{{ email }}'   # reuse a template variable
-dotsync env list
-dotsync env unset BROWSER
+syncdot env set EDITOR=nvim BROWSER=firefox
+syncdot env set GIT_AUTHOR_EMAIL='{{ email }}'   # reuse a template variable
+syncdot env list
+syncdot env unset BROWSER
 ```
 
 ```yaml
@@ -385,16 +403,16 @@ env:
   GIT_AUTHOR_EMAIL: '{{ email }}'
 ```
 
-On every `sync`, `pull`, `checkout` and `var`/`env` change, dotsync writes
+On every `sync`, `pull`, `checkout` and `var`/`env` change, syncdot writes
 them to **`~/.config/environment.d/99-env.conf`**, one `KEY="value"` per
 line, a format both systemd and POSIX shells read:
 
 - **systemd user session:** reads the file by itself, so user services and
   the graphical session on desktops started through systemd (e.g. GNOME,
-  KDE Plasma) get the variables. dotsync also updates the running session,
+  KDE Plasma) get the variables. syncdot also updates the running session,
   so newly started services see changes straight away.
 - **Shells** (TTYs, SSH, systems without systemd): add the line printed by
-  `dotsync env hook` to `~/.profile`, and to `~/.bashrc` / `~/.zshrc` to
+  `syncdot env hook` to `~/.profile`, and to `~/.bashrc` / `~/.zshrc` to
   have it in every interactive shell:
 
 ```sh
@@ -412,11 +430,11 @@ line, a format both systemd and POSIX shells read:
   Many distributions link `/etc/environment` in as `99-environment.conf`,
   which sorts *after* `99-env.conf`, so for any name set in both (often
   `EDITOR`, `VISUAL`) the systemd session uses `/etc/environment`'s value
-  from the next login on. Until then, the running session has dotsync's
-  value, since dotsync pushes changes into it directly. Shells that source
-  the hook always get dotsync's value.
-- `99-env.conf` belongs to dotsync: don't edit it, and if you track
-  `~/.config/environment.d` itself, dotsync leaves this file out of the
+  from the next login on. Until then, the running session has syncdot's
+  value, since syncdot pushes changes into it directly. Shells that source
+  the hook always get syncdot's value.
+- `99-env.conf` belongs to syncdot: don't edit it, and if you track
+  `~/.config/environment.d` itself, syncdot leaves this file out of the
   repo.
 - Like everything in `vars.yaml`, env variables are per profile.
 - Shells that are already open keep their old environment; open a new one
@@ -447,26 +465,26 @@ overwritten is gone. The sync output shows where to find it:
 !  ~/.vimrc  [local-wins; repo version kept in history at 3f2c1ab]
 ```
 ```sh
-git -C ~/.local/share/dotsync/repo show 3f2c1ab:files/.vimrc   # view it
-dotsync push ~/.vimrc                                           # after restoring the file
+git -C ~/.local/share/syncdot/repo show 3f2c1ab:files/.vimrc   # view it
+syncdot push ~/.vimrc                                           # after restoring the file
 ```
 
-`dotsync push` and `dotsync pull` are one-off overrides equivalent to
+`syncdot push` and `syncdot pull` are one-off overrides equivalent to
 `local-wins` and `repo-wins` (and `pull` asks before overwriting local
 changes).
 
 ## Configuration
 
-`~/.config/dotsync/config.yaml` (override the location with the
-`DOTSYNC_CONFIG` environment variable):
+`~/.config/syncdot/config.yaml` (override the location with the
+`SYNCDOT_CONFIG` environment variable):
 
 ```yaml
 profile: base                          # active profile
 conflict_resolution: local-wins        # or newer-wins / repo-wins
 auto_push: true                        # push to GitHub after each commit
 include_binary: false                  # sync binary files too
-repo_path: ~/.local/share/dotsync/repo
-state_path: ~/.local/state/dotsync/state.json
+repo_path: ~/.local/share/syncdot/repo
+state_path: ~/.local/state/syncdot/state.json
 ```
 
 ## What is not synced
@@ -501,26 +519,20 @@ pull request (`.github/workflows/tests.yml`).
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md). dotsync is pre-1.0: minor releases may
+See [CHANGELOG.md](CHANGELOG.md). syncdot is pre-1.0: minor releases may
 include breaking changes, which are always called out there.
 
 ## License
 
-Copyright (C) 2026 Ariel Shatil
-
-dotsync is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option)
-any later version. It is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE)
-for the full text.
+Copyright (c) 2026 Ariel Shatil. syncdot is released under the
+[MIT License](LICENSE). (Versions up to 0.8.0 were released under the GPL
+3.0 or later.)
 
 ## How it works
 
 Three places are involved: your files on disk, a local clone of your
 dotfiles repo, and GitHub. A machine-local state file records the hash of
-what was last synced for each file, which is how dotsync tells which side
+what was last synced for each file, which is how syncdot tells which side
 changed. Templates (`.j2`) are rendered on the way to disk.
 
 ```mermaid
@@ -528,7 +540,7 @@ changed. Templates (`.j2`) are rendered on the way to disk.
 flowchart LR
     state["state.json<br/>last-synced hashes"]
     disk["Disk<br/>~/.vimrc …"]
-    clone["Local clone<br/>~/.local/share/dotsync/repo"]
+    clone["Local clone<br/>~/.local/share/syncdot/repo"]
     gh[("GitHub")]
     state -.- disk
     disk -- "push / add" --> clone
@@ -537,7 +549,7 @@ flowchart LR
     gh -- "git pull" --> clone
 ```
 
-### What `dotsync sync` does
+### What `syncdot sync` does
 
 On a profile other than `base`, sync first merges `base` into the
 profile branch. It then decides each file as below, commits and pushes if
@@ -556,7 +568,7 @@ flowchart LR
 
 ### How each file is decided
 
-For every tracked file dotsync computes three hashes: the file on disk, the
+For every tracked file syncdot computes three hashes: the file on disk, the
 file in the repo (after rendering templates), and the one it recorded the
 last time it synced that file.
 

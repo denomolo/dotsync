@@ -1,23 +1,23 @@
 """
-dotsync — bidirectional dotfile sync with profiles and templating.
+syncdot — bidirectional dotfile sync with profiles and templating.
 
 Usage:
-    dotsync init <repo>              Set dotsync up on this machine
-    dotsync sync [--dry-run]         Bidirectional sync
-    dotsync push [<path>...]         Force disk → git (all, or just <path>s)
-    dotsync pull [<path>...]         Force git → disk (all, or just <path>s)
-    dotsync status [<path>...]       Show per-file state (--diff for details)
-    dotsync add <path>...            Track files/dirs, copying them to the repo (--remote R)
-    dotsync checkout <remote>...     Track repo files, writing them to disk (--local L)
-    dotsync remove <path>...         Stop tracking files/dirs (disk copies are kept)
-    dotsync var list|set|unset       Manage template variables (vars.yaml)
-    dotsync env list|set|unset|hook  Manage session environment variables
-    dotsync profile list             List available profiles
-    dotsync profile set <name>       Switch active profile
-    dotsync profile new <name>       Create a new profile branch
-    dotsync service install          Sync automatically at login (opt-in)
-    dotsync service uninstall        Stop syncing at login
-    dotsync service status           Show the login service status
+    syncdot init <repo>              Set syncdot up on this machine
+    syncdot sync [--dry-run]         Bidirectional sync
+    syncdot push [<path>...]         Force disk → git (all, or just <path>s)
+    syncdot pull [<path>...]         Force git → disk (all, or just <path>s)
+    syncdot status [<path>...]       Show per-file state (--diff for details)
+    syncdot add <path>...            Track files/dirs, copying them to the repo (--remote R)
+    syncdot checkout <remote>...     Track repo files, writing them to disk (--local L)
+    syncdot remove <path>...         Stop tracking files/dirs (disk copies are kept)
+    syncdot var list|set|unset       Manage template variables (vars.yaml)
+    syncdot env list|set|unset|hook  Manage session environment variables
+    syncdot profile list             List available profiles
+    syncdot profile set <name>       Switch active profile
+    syncdot profile new <name>       Create a new profile branch
+    syncdot service install          Sync automatically at login (opt-in)
+    syncdot service uninstall        Stop syncing at login
+    syncdot service status           Show the login service status
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ import yaml
 from . import __version__
 from .config import Config, CONFIG_PATH, profile_branch
 from .lock import LockTimeout, repo_lock
+from .migrate import migrate_from_dotsync
 from .repo import Repo, GitError, normalize_github_url
 from .renderer import RenderError
 from .sync import NOT_SET_UP, Action, PullDeclined, Syncer, find_private
@@ -96,19 +97,19 @@ def print_results(results, verbose: bool = False, pending: bool = False) -> int:
     click.echo("\n  " + "  ".join(parts))
     if any(r.skipped == NOT_SET_UP for r in results):
         click.echo(click.style(
-            "\n  Files not synced on this machine yet are left alone. Run `dotsync pull <path>`\n"
-            "  to take the repo's version or `dotsync push <path>` to keep this machine's\n"
-            "  (`dotsync pull` alone takes the repo's version of everything).", fg="bright_black"))
+            "\n  Files not synced on this machine yet are left alone. Run `syncdot pull <path>`\n"
+            "  to take the repo's version or `syncdot push <path>` to keep this machine's\n"
+            "  (`syncdot pull` alone takes the repo's version of everything).", fg="bright_black"))
     return errors
 
 
 def locked(command):
-    """Run a command while holding the dotsync lock, so runs never overlap."""
+    """Run a command while holding the syncdot lock, so runs never overlap."""
     @functools.wraps(command)
     def wrapper(*args, **kwargs):
         cfg = load_config_or_exit()
         def on_wait(pid: str) -> None:
-            click.echo(click.style(f"Another dotsync is running (pid {pid}); waiting for it…",
+            click.echo(click.style(f"Another syncdot is running (pid {pid}); waiting for it…",
                                    fg="yellow"), err=True)
         try:
             with repo_lock(cfg.state_path.parent / "lock", on_wait=on_wait):
@@ -133,9 +134,12 @@ def load_config_or_exit() -> Config:
 # ── CLI root ───────────────────────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(__version__, prog_name="dotsync")
+@click.version_option(__version__, prog_name="syncdot")
 def cli():
-    """dotsync — bidirectional dotfile sync with profiles and templating."""
+    """syncdot — bidirectional dotfile sync with profiles and templating."""
+    for line in migrate_from_dotsync():
+        click.echo(click.style(f"syncdot was called dotsync up to 0.8.0. {line}", fg="yellow"),
+                   err=True)
 
 
 # ── init ───────────────────────────────────────────────────────────────────────
@@ -144,15 +148,15 @@ def cli():
 @click.argument("repo")
 @click.option("--profile", default="base", show_default=True, help="Profile to use on this machine.")
 @click.option("--new", is_flag=True,
-              help="Start a new dotsync repo locally, for a GitHub repo that doesn't exist yet "
-                   "(it's pushed on your first `dotsync add`).")
+              help="Start a new syncdot repo locally, for a GitHub repo that doesn't exist yet "
+                   "(it's pushed on your first `syncdot add`).")
 def init(repo: str, profile: str, new: bool):
-    """Set dotsync up on this machine with REPO, your dotfiles repo.
+    """Set syncdot up on this machine with REPO, your dotfiles repo.
 
     REPO is a git URL or a GitHub owner/repo shorthand; HTTPS GitHub URLs are
-    converted to SSH so your existing key is used. An existing dotsync repo is
-    cloned, an empty one is set up as a new dotsync repo. Only the clone and
-    ~/.config/dotsync/config.yaml are written: nothing in your home directory
+    converted to SSH so your existing key is used. An existing syncdot repo is
+    cloned, an empty one is set up as a new syncdot repo. Only the clone and
+    ~/.config/syncdot/config.yaml are written: nothing in your home directory
     changes until you pull, push or checkout.
     """
     _init(repo, profile, new)
@@ -163,9 +167,9 @@ def init(repo: str, profile: str, new: bool):
 @click.option("--profile", default="base")
 @click.option("--clone/--init", default=True)
 def install(repo_url: str, profile: str, clone: bool):
-    """Old name for `dotsync init` (before 0.8.0)."""
+    """Old name for `syncdot init` (before 0.8.0)."""
     new_flag = "" if clone else " --new"
-    click.echo(click.style(f"`dotsync install` is now `dotsync init <repo>{new_flag}`.", fg="yellow"),
+    click.echo(click.style(f"`syncdot install` is now `syncdot init <repo>{new_flag}`.", fg="yellow"),
                err=True)
     _init(repo_url, profile, new=not clone)
 
@@ -180,7 +184,7 @@ def _init(repo_url: str, profile: str, new: bool) -> None:
     if cfg.repo_path.exists() and (cfg.repo_path / ".git").exists():
         click.echo(f"Repo already exists at {cfg.repo_path}, keeping it.")
     elif new:
-        click.echo(f"Starting a new dotsync repo at {cfg.repo_path} …")
+        click.echo(f"Starting a new syncdot repo at {cfg.repo_path} …")
         Repo.init(cfg.repo_path, repo_url)
     else:
         click.echo(f"Cloning {repo_url} → {cfg.repo_path} …")
@@ -189,12 +193,12 @@ def _init(repo_url: str, profile: str, new: bool) -> None:
         except GitError as e:
             click.echo(click.style(str(e), fg="red"), err=True)
             click.echo("If the repo doesn't exist on GitHub yet, create it empty, or run "
-                       f"`dotsync init {repo_url} --new` to start locally.", err=True)
+                       f"`syncdot init {repo_url} --new` to start locally.", err=True)
             sys.exit(1)
         branches = repo.remote_branches()
         if not branches:
             # A brand-new, empty GitHub repo: set it up instead of leaving a broken clone
-            click.echo("The repo is empty, so setting it up as a new dotsync repo …")
+            click.echo("The repo is empty, so setting it up as a new syncdot repo …")
             shutil.rmtree(cfg.repo_path)
             Repo.init(cfg.repo_path, repo_url)
         else:
@@ -204,8 +208,8 @@ def _init(repo_url: str, profile: str, new: bool) -> None:
             if target not in branches:
                 shutil.rmtree(cfg.repo_path)
                 click.echo(click.style(
-                    f"{repo_url} has no `base` branch, so it doesn't look like a dotsync repo "
-                    f"(branches: {', '.join(branches)}). Point dotsync at your dotfiles repo, "
+                    f"{repo_url} has no `base` branch, so it doesn't look like a syncdot repo "
+                    f"(branches: {', '.join(branches)}). Point syncdot at your dotfiles repo, "
                     "or at a new empty one.", fg="red"), err=True)
                 sys.exit(1)
             repo.checkout(target)
@@ -213,17 +217,17 @@ def _init(repo_url: str, profile: str, new: bool) -> None:
     cfg.write_default(profile)
 
     if click.confirm("Sync automatically at login? (you can turn it on later with "
-                     "`dotsync service install`)", default=False):
+                     "`syncdot service install`)", default=False):
         try:
             for line in systemd.install():
                 click.echo(line)
         except systemd.SystemdError as e:
             click.echo(click.style(f"Skipped the service: {e}", fg="yellow"), err=True)
 
-    click.echo(click.style("\ndotsync is set up. Nothing on disk was changed. Next:", fg="green"))
-    click.echo("  dotsync add ~/.vimrc ~/.config/kitty   # start tracking files from this machine")
-    click.echo("  dotsync status                         # joining an existing repo: see what's there,")
-    click.echo("  dotsync pull                           # then take the repo's files (or `pull <path>`)")
+    click.echo(click.style("\nsyncdot is set up. Nothing on disk was changed. Next:", fg="green"))
+    click.echo("  syncdot add ~/.vimrc ~/.config/kitty   # start tracking files from this machine")
+    click.echo("  syncdot status                         # joining an existing repo: see what's there,")
+    click.echo("  syncdot pull                           # then take the repo's files (or `pull <path>`)")
 
 
 # ── sync ───────────────────────────────────────────────────────────────────────
@@ -297,7 +301,7 @@ def pull(paths: tuple[str, ...], yes: bool, dry_run: bool, verbose: bool):
                                "pulling overwrites them:", fg="yellow"))
         for dest in at_risk:
             click.echo("  " + str(dest).replace(str(Path.home()), "~", 1))
-        click.echo("(`dotsync status --diff` shows the changes; `dotsync push <path>` keeps one.)")
+        click.echo("(`syncdot status --diff` shows the changes; `syncdot push <path>` keeps one.)")
         try:
             return click.confirm("Overwrite them?", default=False)
         except click.Abort:
@@ -376,7 +380,7 @@ def add(paths: tuple[str, ...], remote: str | None, allow_private: bool, dry_run
     """Start tracking PATHS (files or directories), stored under files/ in the repo.
 
     Several paths can be given at once, and glob patterns are expanded
-    (quote them to let dotsync expand them, e.g. '~/.config/foo/*.conf').
+    (quote them to let syncdot expand them, e.g. '~/.config/foo/*.conf').
     Everything is added in a single commit; paths that can't be added are
     reported and the rest are still added.
 
@@ -450,7 +454,7 @@ def checkout(remotes: tuple[str, ...], local: Path | None, force: bool, dry_run:
     """Start tracking REMOTES that are already in the repo (the reverse of add).
 
     REMOTES are paths or glob patterns relative to files/ (quote globs
-    so dotsync matches them inside the repo). Each one is written to disk
+    so syncdot matches them inside the repo). Each one is written to disk
     and added to the manifest in a single commit; ones that can't be
     checked out are reported and the rest are still checked out.
 
@@ -515,7 +519,7 @@ def var_list():
     cfg = load_config_or_exit()
     variables = Syncer(cfg, dry_run=True).var_list()
     if not variables:
-        click.echo("No variables set. Add one with `dotsync var set name=value`.")
+        click.echo("No variables set. Add one with `syncdot var set name=value`.")
         return
     width = max(len(n) for n in variables)
     for name, value in variables.items():
@@ -534,7 +538,7 @@ def var_set(assignments: tuple[str, ...], as_yaml: bool, dry_run: bool):
     """Set template variables and re-render the templates that use them.
 
     Values are stored as strings unless --yaml is given. Quote values with
-    spaces for your shell: dotsync var set fullname="Ariel Shatil".
+    spaces for your shell: syncdot var set fullname="Ariel Shatil".
     """
     values = {}
     for a in assignments:
@@ -599,7 +603,7 @@ def env_list():
     cfg = load_config_or_exit()
     rows = Syncer(cfg, dry_run=True).env_list()
     if not rows:
-        click.echo("No environment variables set. Add one with `dotsync env set NAME=value`.")
+        click.echo("No environment variables set. Add one with `syncdot env set NAME=value`.")
         return
     width = max(len(r[0]) for r in rows)
     for name, raw, rendered, error in rows:
@@ -618,7 +622,7 @@ def env_list():
 def env_set(assignments: tuple[str, ...], dry_run: bool):
     """Set environment variables and regenerate the session environment.
 
-    Values may use template variables: dotsync env set GIT_AUTHOR_EMAIL='{{ email }}'
+    Values may use template variables: syncdot env set GIT_AUTHOR_EMAIL='{{ email }}'
     (single quotes keep your shell from touching them).
     """
     values = {}
@@ -644,7 +648,7 @@ def env_unset(names: tuple[str, ...], dry_run: bool):
 
 @env.command("hook")
 def env_hook():
-    """Print the line that loads dotsync's environment in your shell."""
+    """Print the line that loads syncdot's environment in your shell."""
     cfg = load_config_or_exit()
     path = str(Syncer(cfg, dry_run=True).env_path).replace(str(Path.home()), "~", 1)
     click.echo(f"The systemd user session reads {path} by itself.")
@@ -689,7 +693,7 @@ def profile_set(name: str):
     repo = Repo(cfg.repo_path)
 
     if not repo.branch_exists(branch) and not repo.branch_exists(branch, remote=True):
-        click.echo(click.style(f"Profile {name!r} does not exist. Use `dotsync profile new {name}` to create it.", fg="red"), err=True)
+        click.echo(click.style(f"Profile {name!r} does not exist. Use `syncdot profile new {name}` to create it.", fg="red"), err=True)
         sys.exit(1)
 
     # Rewrite config with new profile
@@ -700,7 +704,7 @@ def profile_set(name: str):
         yaml.dump(data, f, default_flow_style=False)
 
     click.echo(f"Active profile set to {click.style(name, fg='cyan')}.")
-    click.echo("Run `dotsync pull` to apply the new profile to disk.")
+    click.echo("Run `syncdot pull` to apply the new profile to disk.")
 
 
 @profile.command("new")
@@ -713,7 +717,7 @@ def profile_new(name: str):
     try:
         repo.create_profile_branch(name)
         click.echo(f"Created profile {click.style(name, fg='cyan')} (branch: profiles/{name}).")
-        click.echo("Switch to it with `dotsync profile set` and edit files/ or vars.yaml on that")
+        click.echo("Switch to it with `syncdot profile set` and edit files/ or vars.yaml on that")
         click.echo("branch to override base. Changes to base are merged in on every sync.")
     except GitError as e:
         click.echo(click.style(str(e), fg="red"), err=True)

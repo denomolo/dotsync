@@ -1,7 +1,7 @@
 """
 state.py — Per-machine state file: tracks last-applied hashes for 3-way merge detection.
 
-State lives at ~/.local/state/dotsync/state.json (gitignored, machine-local).
+State lives at ~/.local/state/syncdot/state.json (gitignored, machine-local).
 
 Schema:
 {
@@ -91,11 +91,11 @@ class State:
 
 # ── Hashing ────────────────────────────────────────────────────────────────────
 
-# File dotsync generates in ~/.config/environment.d from the env: section
+# File syncdot generates in ~/.config/environment.d from the env: section
 ENV_D_NAME = "99-env.conf"
 
 # Directory entries never synced (nested git checkouts would become
-# submodules; dotsync's own generated env file must not end up in the repo)
+# submodules; syncdot's own generated env file must not end up in the repo)
 IGNORED_NAMES = {".git", ENV_D_NAME}
 
 # Bytes sniffed for binary detection (same heuristic as git: a NUL byte → binary)

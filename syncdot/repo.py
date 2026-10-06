@@ -1,5 +1,5 @@
 """
-repo.py — Git operations for dotsync.
+repo.py — Git operations for syncdot.
 
 Branch model:
   base              ← shared files, all profiles merge from here
@@ -91,7 +91,7 @@ class Repo:
         manifest = path / "manifest.yaml"
         if not manifest.exists():
             manifest.write_text(
-                "# dotsync manifest\n"
+                "# syncdot manifest\n"
                 "# Each entry maps a source (relative to the repo root) to a destination.\n"
                 "#\n"
                 "# files:\n"
@@ -112,10 +112,10 @@ class Repo:
 
         readme = path / "README.md"
         if not readme.exists():
-            readme.write_text("# dotsync dotfiles\n\nManaged by [dotsync](https://github.com/you/dotsync).\n")
+            readme.write_text("# syncdot dotfiles\n\nManaged by [syncdot](https://github.com/denomolo/syncdot).\n")
 
         repo._run("add", "-A")
-        repo._run("commit", "-m", "init: scaffold dotsync repo")
+        repo._run("commit", "-m", "init: scaffold syncdot repo")
         return repo
 
     # ── Branch management ──────────────────────────────────────────────────────
@@ -196,8 +196,8 @@ class Repo:
         self._run("read-tree", "HEAD", env=env)
         self._run("add", "-A", env=env)
         tree = self._run("write-tree", env=env).stdout.strip()
-        return self._run("-c", "user.name=dotsync", "-c", "user.email=dotsync@localhost",
-                         "commit-tree", tree, "-p", "HEAD", "-m", "dotsync preview",
+        return self._run("-c", "user.name=syncdot", "-c", "user.email=syncdot@localhost",
+                         "commit-tree", tree, "-p", "HEAD", "-m", "syncdot preview",
                          env=env).stdout.strip()
 
     def remote_branches(self) -> list[str]:

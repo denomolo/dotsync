@@ -1,5 +1,5 @@
 """
-systemd.py — Optional systemd user service that runs `dotsync sync` at login.
+systemd.py — Optional systemd user service that runs `syncdot sync` at login.
 
 Unit files are written to ~/.config/systemd/user/.
 """
@@ -11,23 +11,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-SERVICE_NAME = "dotsync.service"
-# Installed by dotsync 0.6.0; removed again by install and uninstall
-OLD_TIMER_NAME = "dotsync.timer"
+SERVICE_NAME = "syncdot.service"
+# Units from before the rename (dotsync) and from 0.6.0's periodic sync;
+# install and uninstall remove them
+OLD_UNITS = {
+    "dotsync.timer": "periodic sync is no longer supported",
+    "dotsync.service": "replaced by syncdot.service",
+}
 
 SERVICE_TEMPLATE = """\
 [Unit]
-Description=dotsync — bidirectional dotfile sync
+Description=syncdot — bidirectional dotfile sync
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={executable} -m dotsync sync
+ExecStart={executable} -m syncdot sync
 StandardOutput=journal
 StandardError=journal
-# Give up after 3 minutes rather than blocking login indefinitely (dotsync
-# itself waits up to 2 minutes for another running dotsync to finish)
+# Give up after 3 minutes rather than blocking login indefinitely (syncdot
+# itself waits up to 2 minutes for another running syncdot to finish)
 TimeoutStartSec=180
 
 [Install]
@@ -48,36 +52,38 @@ def install() -> list[str]:
     _require_systemctl()
     directory = unit_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    messages = _remove_old_timer()
+    messages = _remove_old_units()
     service = directory / SERVICE_NAME
     service.write_text(SERVICE_TEMPLATE.format(executable=sys.executable))
     messages.append(f"Wrote {service}")
     _systemctl("daemon-reload")
     _systemctl("enable", SERVICE_NAME)
-    messages.append("dotsync will sync at login (after the network is up).")
+    messages.append("syncdot will sync at login (after the network is up).")
     return messages
 
 
 def uninstall() -> list[str]:
     _require_systemctl()
-    messages = _remove_old_timer()
+    messages = _remove_old_units()
     _systemctl("disable", SERVICE_NAME, check=False)
     path = unit_dir() / SERVICE_NAME
     if path.exists():
         path.unlink()
         messages.append(f"Removed {path}")
     _systemctl("daemon-reload")
-    messages.append("dotsync no longer syncs at login.")
+    messages.append("syncdot no longer syncs at login.")
     return messages
 
 
-def _remove_old_timer() -> list[str]:
-    timer = unit_dir() / OLD_TIMER_NAME
-    if not timer.exists():
-        return []
-    _systemctl("disable", "--now", OLD_TIMER_NAME, check=False)
-    timer.unlink()
-    return [f"Removed {timer} (periodic sync is no longer supported)"]
+def _remove_old_units() -> list[str]:
+    messages = []
+    for name, why in OLD_UNITS.items():
+        path = unit_dir() / name
+        if path.exists():
+            _systemctl("disable", "--now", name, check=False)
+            path.unlink()
+            messages.append(f"Removed {path} ({why})")
+    return messages
 
 
 def status() -> str:
@@ -91,7 +97,7 @@ def status() -> str:
 
 def _require_systemctl() -> None:
     if not shutil.which("systemctl"):
-        raise SystemdError("systemd isn't available here; run `dotsync sync` from cron or "
+        raise SystemdError("systemd isn't available here; run `syncdot sync` from cron or "
                            "your shell's startup files instead")
 
 

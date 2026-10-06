@@ -1,4 +1,4 @@
-"""--dry-run never changes the clone, and only one dotsync runs at a time."""
+"""--dry-run never changes the clone, and only one syncdot runs at a time."""
 
 import subprocess
 import sys
@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-import dotsync.lock
+import syncdot.lock
 from conftest import git
 
 
@@ -96,7 +96,7 @@ def test_dry_run_reports_a_base_merge_conflict_without_starting_it(sandbox):
 # ── locking ────────────────────────────────────────────────────────────────────
 
 def hold_lock(path, seconds: float) -> subprocess.Popen:
-    """Hold the dotsync lock from another process, like a running sync would."""
+    """Hold the syncdot lock from another process, like a running sync would."""
     code = (
         "import fcntl, os, sys, time\n"
         f"fd = os.open({str(path)!r}, os.O_RDWR | os.O_CREAT, 0o644)\n"
@@ -114,8 +114,8 @@ def lock_path(sandbox):
     return sandbox.root / "state" / "lock"
 
 
-def test_command_gives_up_while_another_dotsync_holds_the_lock(sandbox, monkeypatch):
-    monkeypatch.setattr(dotsync.lock, "LOCK_TIMEOUT", 0.5)
+def test_command_gives_up_while_another_syncdot_holds_the_lock(sandbox, monkeypatch):
+    monkeypatch.setattr(syncdot.lock, "LOCK_TIMEOUT", 0.5)
     sandbox.file(".vimrc", "v")
     lock_path(sandbox).parent.mkdir(parents=True, exist_ok=True)
     holder = hold_lock(lock_path(sandbox), seconds=30)
@@ -125,13 +125,13 @@ def test_command_gives_up_while_another_dotsync_holds_the_lock(sandbox, monkeypa
         holder.kill()
         holder.wait()
 
-    assert f"Another dotsync is running (pid {holder.pid})" in result.output
+    assert f"Another syncdot is running (pid {holder.pid})" in result.output
     assert "gave up" in result.output
     assert not (sandbox.repo / "files/.vimrc").exists()
 
 
 def test_command_waits_for_the_lock_then_runs(sandbox, monkeypatch):
-    monkeypatch.setattr(dotsync.lock, "LOCK_TIMEOUT", 10)
+    monkeypatch.setattr(syncdot.lock, "LOCK_TIMEOUT", 10)
     sandbox.file(".vimrc", "v")
     lock_path(sandbox).parent.mkdir(parents=True, exist_ok=True)
     holder = hold_lock(lock_path(sandbox), seconds=1)
@@ -149,7 +149,7 @@ def test_command_waits_for_the_lock_then_runs(sandbox, monkeypatch):
 @pytest.mark.parametrize("args", [("status",), ("sync",), ("var", "list"), ("env", "list"),
                                   ("profile", "list")])
 def test_every_repo_command_takes_the_lock(sandbox, monkeypatch, args):
-    monkeypatch.setattr(dotsync.lock, "LOCK_TIMEOUT", 0.3)
+    monkeypatch.setattr(syncdot.lock, "LOCK_TIMEOUT", 0.3)
     lock_path(sandbox).parent.mkdir(parents=True, exist_ok=True)
     holder = hold_lock(lock_path(sandbox), seconds=30)
     try:
@@ -158,4 +158,4 @@ def test_every_repo_command_takes_the_lock(sandbox, monkeypatch, args):
         holder.kill()
         holder.wait()
 
-    assert "Another dotsync is running" in result.output
+    assert "Another syncdot is running" in result.output

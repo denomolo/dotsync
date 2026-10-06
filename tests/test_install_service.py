@@ -4,20 +4,20 @@ import subprocess
 
 import pytest
 
-import dotsync.__main__ as cli_module
-import dotsync.config as config_module
-import dotsync.systemd
+import syncdot.__main__ as cli_module
+import syncdot.config as config_module
+import syncdot.systemd
 from conftest import git
 
 
 @pytest.fixture
 def fresh_machine(sandbox, monkeypatch):
-    """A new, empty home with no dotsync config yet. Returns a function that
+    """A new, empty home with no syncdot config yet. Returns a function that
     switches to another such machine."""
     def switch(name: str):
         home = sandbox.root / name
         home.mkdir()
-        config = home / ".config" / "dotsync" / "config.yaml"
+        config = home / ".config" / "syncdot" / "config.yaml"
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(home)
         monkeypatch.setattr(config_module, "CONFIG_PATH", config)
@@ -40,7 +40,7 @@ def test_install_init_then_track_and_push(sandbox, fresh_machine):
                                    input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert (home / ".config/dotsync/config.yaml").exists()
+    assert (home / ".config/syncdot/config.yaml").exists()
     (home / ".vimrc").write_text("set nu\n")
     sandbox.run("add", "~/.vimrc")
     assert git(remote, "show", "base:files/.vimrc") == "set nu\n"
@@ -75,14 +75,14 @@ def test_second_machine_clones_and_checks_out(sandbox, fresh_machine):
     # Regression (0.6.0): the remote's default branch is `main`, which doesn't
     # exist, so nothing got checked out and install wrongly re-initialised it
     assert "repo is empty" not in result.output
-    clone_b = home_b / ".local/share/dotsync/repo"
+    clone_b = home_b / ".local/share/syncdot/repo"
     assert git(clone_b, "rev-parse", "base") == git(remote, "rev-parse", "base")
     sandbox.run("pull")
 
     assert (home_b / ".config/kitty/kitty.conf").read_text() == "font_size 12\n"
 
 
-def test_install_refuses_a_repo_that_is_not_a_dotsync_repo(sandbox, fresh_machine):
+def test_install_refuses_a_repo_that_is_not_a_syncdot_repo(sandbox, fresh_machine):
     fresh_machine("machine-a")
     remote = new_remote(sandbox, "other-project.git")
     work = sandbox.root / "other-project"
@@ -95,7 +95,7 @@ def test_install_refuses_a_repo_that_is_not_a_dotsync_repo(sandbox, fresh_machin
     result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote)], input="n\n")
 
     assert result.exit_code != 0
-    assert "doesn't look like a dotsync repo" in result.output
+    assert "doesn't look like a syncdot repo" in result.output
     assert git(remote, "for-each-ref", "--format=%(refname)").split() == ["refs/heads/main"]
 
 
@@ -108,7 +108,7 @@ def test_install_does_not_enable_autosync_by_default(sandbox, fresh_machine):
 
     assert result.exit_code == 0, result.output
     assert "[y/N]" in result.output
-    assert not (home / ".config/systemd/user/dotsync.service").exists()
+    assert not (home / ".config/systemd/user/syncdot.service").exists()
     assert sandbox.systemctl_calls() == []
 
 
@@ -120,8 +120,8 @@ def test_install_can_opt_in_to_sync_at_login(sandbox, fresh_machine):
                                    input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert (home / ".config/systemd/user/dotsync.service").exists()
-    assert "--user enable dotsync.service" in sandbox.systemctl_calls()
+    assert (home / ".config/systemd/user/syncdot.service").exists()
+    assert "--user enable syncdot.service" in sandbox.systemctl_calls()
 
 
 # ── service ────────────────────────────────────────────────────────────────────
@@ -133,22 +133,27 @@ def units(sandbox):
 def test_service_install_enables_login_sync_only(sandbox):
     sandbox.run("service", "install")
 
-    service = (units(sandbox) / "dotsync.service").read_text()
-    assert "-m dotsync sync" in service and "WantedBy=default.target" in service
+    service = (units(sandbox) / "syncdot.service").read_text()
+    assert "-m syncdot sync" in service and "WantedBy=default.target" in service
     assert not (units(sandbox) / "dotsync.timer").exists()
     # Enabled for the next login, not run right away
-    assert sandbox.systemctl_calls() == ["--user daemon-reload", "--user enable dotsync.service"]
+    assert sandbox.systemctl_calls() == ["--user daemon-reload", "--user enable syncdot.service"]
 
 
-def test_service_install_and_uninstall_remove_a_timer_from_0_6_0(sandbox):
+def test_service_install_removes_units_from_dotsync(sandbox):
+    """The 0.6.0 timer and the service from before the rename (both named dotsync)."""
     units(sandbox).mkdir(parents=True)
     (units(sandbox) / "dotsync.timer").write_text("[Timer]\nOnUnitActiveSec=1h\n")
+    (units(sandbox) / "dotsync.service").write_text("[Service]\nExecStart=python -m dotsync sync\n")
 
     out = sandbox.run("service", "install").output
 
-    assert "periodic sync is no longer supported" in out
+    assert "periodic sync is no longer supported" in out and "replaced by syncdot.service" in out
     assert not (units(sandbox) / "dotsync.timer").exists()
-    assert "--user disable --now dotsync.timer" in sandbox.systemctl_calls()
+    assert not (units(sandbox) / "dotsync.service").exists()
+    assert (units(sandbox) / "syncdot.service").exists()
+    calls = sandbox.systemctl_calls()
+    assert "--user disable --now dotsync.timer" in calls and "--user disable --now dotsync.service" in calls
 
 
 def test_service_uninstall_removes_the_service(sandbox):
@@ -156,18 +161,18 @@ def test_service_uninstall_removes_the_service(sandbox):
 
     sandbox.run("service", "uninstall")
 
-    assert not (units(sandbox) / "dotsync.service").exists()
-    assert "--user disable dotsync.service" in sandbox.systemctl_calls()
+    assert not (units(sandbox) / "syncdot.service").exists()
+    assert "--user disable syncdot.service" in sandbox.systemctl_calls()
 
 
 def test_service_status_asks_systemd(sandbox):
     sandbox.run("service", "status")
 
-    assert sandbox.systemctl_calls() == ["--user status --no-pager dotsync.service"]
+    assert sandbox.systemctl_calls() == ["--user status --no-pager syncdot.service"]
 
 
 def test_service_without_systemd_fails_cleanly(sandbox, monkeypatch):
-    monkeypatch.setattr(dotsync.systemd.shutil, "which", lambda name: None)
+    monkeypatch.setattr(syncdot.systemd.shutil, "which", lambda name: None)
 
     result = sandbox.run("service", "install", ok=False)
 

@@ -4,7 +4,7 @@ names, config without repo_url, status fetching, pull confirmation, exit codes."
 import pytest
 import yaml
 
-import dotsync.__main__ as cli_module
+import syncdot.__main__ as cli_module
 from conftest import git
 from test_install_service import fresh_machine, new_remote  # noqa: F401  (fixture)
 
@@ -19,7 +19,7 @@ def test_init_takes_the_repo_as_an_argument(sandbox, fresh_machine):
 
     assert result.exit_code == 0, result.output
     assert "repo is empty" in result.output
-    config = yaml.safe_load((home / ".config/dotsync/config.yaml").read_text())
+    config = yaml.safe_load((home / ".config/syncdot/config.yaml").read_text())
     assert "repo_url" not in config and config["conflict_resolution"] == "local-wins"
 
 
@@ -30,7 +30,7 @@ def test_init_new_works_before_the_remote_exists(sandbox, fresh_machine):
     result = sandbox.runner.invoke(cli_module.cli, ["init", str(remote), "--new"], input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert (home / ".local/share/dotsync/repo/manifest.yaml").exists()
+    assert (home / ".local/share/syncdot/repo/manifest.yaml").exists()
 
 
 def test_init_suggests_new_when_the_repo_cannot_be_cloned(sandbox, fresh_machine):
@@ -50,11 +50,11 @@ def test_install_still_works_as_an_alias(sandbox, fresh_machine):
                                    input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert "`dotsync install` is now `dotsync init <repo> --new`" in result.output
+    assert "`syncdot install` is now `syncdot init <repo> --new`" in result.output
     assert "install" not in sandbox.run("--help").output.split("Commands:")[1]
 
 
-def test_bare_dotsync_shows_help():
+def test_bare_syncdot_shows_help():
     from click.testing import CliRunner
     result = CliRunner().invoke(cli_module.cli, [])
 
@@ -68,12 +68,12 @@ def test_bare_dotsync_shows_help():
 def test_old_policy_names_still_load(sandbox, old, new):
     sandbox.write_config(conflict_resolution=old)
 
-    from dotsync.config import Config
+    from syncdot.config import Config
     assert Config.load().conflict_resolution == new
 
 
 def test_config_without_repo_url_and_with_a_stale_one_both_load(sandbox):
-    from dotsync.config import Config
+    from syncdot.config import Config
     sandbox.config_path.write_text(sandbox.config_path.read_text().replace(
         f"repo_url: {sandbox.remote}", "repo_url: git@example.com:moved/elsewhere.git"))
     assert Config.load().profile == "base"

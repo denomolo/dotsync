@@ -1,8 +1,8 @@
 """
-lock.py — Only one dotsync touches the repo clone at a time.
+lock.py — Only one syncdot touches the repo clone at a time.
 
-Commands take an exclusive flock on ~/.local/state/dotsync/lock (next to the
-state file). A second dotsync, e.g. `dotsync add` while the login service is
+Commands take an exclusive flock on ~/.local/state/syncdot/lock (next to the
+state file). A second syncdot, e.g. `syncdot add` while the login service is
 syncing, waits for the first to finish and gives up after LOCK_TIMEOUT
 seconds. The kernel drops the lock when the process exits, so a crashed run
 never leaves it stuck.
@@ -33,7 +33,7 @@ def _holder(path: Path) -> str:
 
 @contextmanager
 def repo_lock(path: Path, on_wait: Callable[[str], None] | None = None) -> Iterator[None]:
-    """Hold the dotsync lock for the duration of the block."""
+    """Hold the syncdot lock for the duration of the block."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -50,7 +50,7 @@ def repo_lock(path: Path, on_wait: Callable[[str], None] | None = None) -> Itera
                         on_wait(_holder(path))
                 if time.monotonic() >= deadline:
                     raise LockTimeout(
-                        f"Another dotsync is running (pid {_holder(path)}); gave up after "
+                        f"Another syncdot is running (pid {_holder(path)}); gave up after "
                         f"{LOCK_TIMEOUT:g}s. Try again when it has finished."
                     ) from None
                 time.sleep(0.1)

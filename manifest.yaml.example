@@ -1,4 +1,4 @@
-# dotsync manifest
+# syncdot manifest
 # Maps repo source files → system destinations.
 #
 # Source paths are relative to the repo root.

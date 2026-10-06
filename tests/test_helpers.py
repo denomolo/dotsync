@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from dotsync.__main__ import expand_paths
-from dotsync.config import profile_branch
-from dotsync.repo import normalize_github_url
-from dotsync.sync import _env_edit, _vars_set, _vars_unset, _yaml_entry
+from syncdot.__main__ import expand_paths
+from syncdot.config import profile_branch
+from syncdot.repo import normalize_github_url
+from syncdot.sync import _env_edit, _vars_set, _vars_unset, _yaml_entry
 
 
 @pytest.mark.parametrize("url, expected", [

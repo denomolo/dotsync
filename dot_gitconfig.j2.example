@@ -1,5 +1,5 @@
 # files/dot_gitconfig.j2
-# Rendered by dotsync — do not edit ~/.gitconfig directly.
+# Rendered by syncdot — do not edit ~/.gitconfig directly.
 
 [user]
     name  = {{ name }}

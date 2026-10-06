@@ -1,4 +1,4 @@
-"""dotsync var and dotsync env."""
+"""syncdot var and syncdot env."""
 
 import shutil
 import subprocess
@@ -65,7 +65,7 @@ def test_var_unset_refuses_while_a_template_uses_it(sandbox):
 
 def test_var_rejects_bad_names_and_the_env_section(sandbox):
     assert "Invalid variable name" in sandbox.run("var", "set", "1x=y", ok=False).output
-    assert "dotsync env" in sandbox.run("var", "set", "env=x", ok=False).output
+    assert "syncdot env" in sandbox.run("var", "set", "env=x", ok=False).output
     assert "Not set" in sandbox.run("var", "unset", "nope", ok=False).output
 
 
@@ -80,7 +80,7 @@ def test_var_dry_run_changes_nothing(sandbox):
 # ── env ────────────────────────────────────────────────────────────────────────
 
 def source_env(path: Path) -> dict[str, str]:
-    """Environment a POSIX shell gets from the line `dotsync env hook` prints."""
+    """Environment a POSIX shell gets from the line `syncdot env hook` prints."""
     out = subprocess.run(["sh", "-c", f'[ -r "{path}" ] && {{ set -a; . "{path}"; set +a; }}; env -0'],
                          capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}).stdout
     return dict(kv.split("=", 1) for kv in out.split("\0") if "=" in kv)
