@@ -214,7 +214,7 @@ class Syncer:
                 "(set include_binary: true in config to allow binaries)"
             )
         if not allow_private:
-            private = _find_private(dest, self.include_binary)
+            private = find_private(dest, self.include_binary)
             if private is not None:
                 where = "is private" if private == dest else f"contains private file {private}"
                 raise ValueError(
@@ -1157,7 +1157,7 @@ def _vars_unset(text: str, names: list[str]) -> str:
     return new_text
 
 
-def _find_private(path: Path, include_binary: bool = False) -> Path | None:
+def find_private(path: Path, include_binary: bool = False) -> Path | None:
     """
     First path that group and others can't access at all (e.g. 600, 700):
     `path` itself, or a synced file inside it if it's a directory.

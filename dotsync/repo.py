@@ -183,6 +183,10 @@ class Repo:
         self._run("commit", "-m", message)
         return True
 
+    def has_commits(self) -> bool:
+        """False for a freshly cloned empty repository."""
+        return self._run("rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode == 0
+
     def has_uncommitted(self) -> bool:
         result = self._run("status", "--porcelain")
         return bool(result.stdout.strip())

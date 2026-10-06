@@ -10,8 +10,21 @@ include breaking changes.
 - Only one dotsync runs at a time: commands take a lock on
   `~/.local/state/dotsync/lock`, wait for a running dotsync (e.g. the login
   service) to finish, and give up after two minutes.
+- `dotsync service install` also installs a `dotsync.timer` that syncs every
+  hour while you're logged in, not just at login. `--interval` (e.g. `15min`)
+  changes it, `--no-timer` keeps login-only sync; `uninstall` and `status`
+  cover both units.
+- `add --allow-private` warns that the file will arrive on other machines with
+  default permissions (usually 644) and that its contents are in the repo.
 
 ### Fixed
+- `dotsync install` pointed at an empty repo without `--init` reported
+  success but left a broken clone (no `base` branch or manifest); it now sets
+  the repo up as a new dotsync repo.
+- Repo and template errors (e.g. a missing `manifest.yaml`) are shown as a
+  message instead of a Python traceback in every command.
+- The service's start timeout is 3 minutes (was 60 seconds), so a background
+  sync waiting for another dotsync isn't killed by systemd.
 - `--dry-run` no longer changes the local clone. `sync`, `pull`,
   `checkout` and `var`/`env` dry runs used to run `git pull` and merge
   `base` into the profile branch for real; they now fetch and preview the

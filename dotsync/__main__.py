@@ -15,15 +15,16 @@ Usage:
     dotsync profile list             List available profiles
     dotsync profile set <name>       Switch active profile
     dotsync profile new <name>       Create a new profile branch
-    dotsync service install          Install systemd user service
-    dotsync service uninstall        Remove systemd user service
-    dotsync service status           Show systemd service status
+    dotsync service install          Sync at login and hourly (--interval, --no-timer)
+    dotsync service uninstall        Stop syncing automatically
+    dotsync service status           Show the systemd service and timer status
 """
 
 from __future__ import annotations
 
 import functools
 import glob
+import shutil
 import os
 import sys
 from pathlib import Path
@@ -36,7 +37,7 @@ from .config import Config, CONFIG_PATH, profile_branch
 from .lock import LockTimeout, repo_lock
 from .repo import Repo, GitError, normalize_github_url
 from .renderer import RenderError
-from .sync import Action, Syncer
+from .sync import Action, Syncer, find_private
 from . import systemd
 
 
@@ -101,7 +102,7 @@ def locked(command):
         try:
             with repo_lock(cfg.state_path.parent / "lock", on_wait=on_wait):
                 return command(*args, **kwargs)
-        except LockTimeout as e:
+        except (LockTimeout, GitError, RenderError) as e:
             click.echo(click.style(str(e), fg="red"), err=True)
             sys.exit(1)
     return wrapper
@@ -150,18 +151,28 @@ def install(repo_url: str, profile: str, clone: bool):
         except GitError as e:
             click.echo(click.style(str(e), fg="red"), err=True)
             sys.exit(1)
+        if not repo.has_commits():
+            # A brand-new, empty GitHub repo: set it up instead of leaving a broken clone
+            click.echo("The repo is empty, so setting it up as a new dotsync repo …")
+            shutil.rmtree(cfg.repo_path)
+            repo = Repo.init(cfg.repo_path, repo_url)
     else:
         click.echo(f"Initialising new repo at {cfg.repo_path} …")
         repo = Repo.init(cfg.repo_path, repo_url)
 
     cfg.write_default(repo_url, profile)
 
-    if click.confirm("Install systemd user service (auto-sync on login)?", default=True):
-        systemd.install()
+    if click.confirm(f"Install systemd user service (sync at login and every "
+                     f"{systemd.DEFAULT_INTERVAL})?", default=True):
+        try:
+            for line in systemd.install():
+                click.echo(line)
+        except systemd.SystemdError as e:
+            click.echo(click.style(f"Skipped the service: {e}", fg="yellow"), err=True)
 
-    click.echo(click.style("\ndotsync installed. Edit your manifest:", fg="green"))
-    click.echo(f"  {cfg.repo_path}/manifest.yaml")
-    click.echo(f"  {cfg.repo_path}/vars.yaml")
+    click.echo(click.style("\ndotsync installed. Next:", fg="green"))
+    click.echo("  dotsync add ~/.vimrc ~/.config/kitty     # start tracking files")
+    click.echo("  dotsync checkout '*'                     # or bring an existing repo's files here")
 
 
 # ── sync ───────────────────────────────────────────────────────────────────────
@@ -290,6 +301,14 @@ def add(paths: tuple[str, ...], remote: str | None, allow_private: bool, dry_run
         if not r.error:
             dest = str(r.dest).replace(str(Path.home()), "~")
             click.echo(f"  Tracking {dest} as {click.style(r.source, fg='cyan')}")
+    if allow_private:
+        private = [r.dest for r in results if not r.error and find_private(r.dest) is not None]
+        for dest in private:
+            shown = str(dest).replace(str(Path.home()), "~")
+            click.echo(click.style(
+                f"  Warning: {shown} is private here, but git doesn't store permissions: on "
+                "other machines it arrives with default permissions (usually 644), readable "
+                "by other users. Its contents are also in your dotfiles repo.", fg="yellow"))
     if any(r.error for r in results):
         sys.exit(1)
 
@@ -599,21 +618,33 @@ def service():
 
 
 @service.command("install")
-def service_install():
-    """Install the systemd user service (auto-sync on login)."""
-    systemd.install()
+@click.option("--interval", default=systemd.DEFAULT_INTERVAL, show_default=True,
+              help="How often to sync while logged in (e.g. 30min, 2h, 1d).")
+@click.option("--no-timer", is_flag=True, help="Only sync at login, never periodically.")
+def service_install(interval: str, no_timer: bool):
+    """Install the systemd user units: sync at login and every INTERVAL."""
+    _run_systemd(lambda: systemd.install(None if no_timer else interval))
 
 
 @service.command("uninstall")
 def service_uninstall():
-    """Remove the systemd user service."""
-    systemd.uninstall()
+    """Remove the systemd user units (stop syncing automatically)."""
+    _run_systemd(systemd.uninstall)
 
 
 @service.command("status")
 def service_status():
-    """Show systemd service status."""
-    click.echo(systemd.status())
+    """Show the status of the systemd service and timer."""
+    _run_systemd(lambda: [systemd.status()])
+
+
+def _run_systemd(action) -> None:
+    try:
+        for line in action():
+            click.echo(line)
+    except systemd.SystemdError as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

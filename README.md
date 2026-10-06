@@ -13,6 +13,7 @@ which side changed and only asks a conflict policy to decide when both did.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Commands](#commands)
+- [Automatic sync](#automatic-sync)
 - [Dotfiles repo layout](#dotfiles-repo-layout)
 - [Profiles](#profiles)
 - [Templates](#templates)
@@ -68,7 +69,9 @@ dotsync install --repo-url <you>/dotfiles
 `--repo-url` accepts `owner/repo`, an HTTPS GitHub URL (both converted to
 SSH so your key is used) or any git URL. `install` writes
 `~/.config/dotsync/config.yaml`, and asks whether to install the systemd
-user service that runs `dotsync sync` on every login. Use
+units that run `dotsync sync` at login and every hour (see
+[Automatic sync](#automatic-sync)). If the repo you point it at is still
+empty, `install` sets it up as a new dotsync repo even without `--init`. Use
 `--profile <name>` to start on a profile other than `base`.
 
 ## Quick start
@@ -103,7 +106,7 @@ dotsync checkout '*'                  # everything in the repo
 | `dotsync var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
 | `dotsync env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
 | `dotsync profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
-| `dotsync service install \| uninstall \| status` | Manage the systemd user service that syncs on login. |
+| `dotsync service install \| uninstall \| status` | Sync automatically at login and on a timer ([details](#automatic-sync)). |
 | `dotsync --version` | Print the installed version. |
 
 `sync`, `push`, `pull`, `add`, `checkout`, `remove`, `var set|unset` and
@@ -115,7 +118,7 @@ they were. `sync`, `push` and `pull` accept `-v` to list unchanged files
 too.
 
 Only one dotsync runs at a time. If you start a command while another one
-is running (for example the login service's `sync`), it waits for it to
+is running (for example the background `sync`), it waits for it to
 finish, and gives up after two minutes.
 
 ### Output symbols
@@ -181,6 +184,24 @@ Without paths they act on every tracked file. Paths are files or
 directories on disk as listed in the manifest; quoted globs are matched
 against tracked paths rather than the filesystem. A file *inside* a tracked
 directory is rejected — use the directory.
+
+## Automatic sync
+
+```sh
+dotsync service install                 # at login, then every hour
+dotsync service install --interval 15min
+dotsync service install --no-timer      # at login only
+dotsync service status
+dotsync service uninstall
+```
+
+This installs two systemd user units in `~/.config/systemd/user/`:
+`dotsync.service` runs `dotsync sync` once, at login after the network is
+up, and `dotsync.timer` runs it again every interval while you're logged in
+(1 hour by default, with up to 2 minutes of random delay). Output goes to
+the journal: `journalctl --user -u dotsync`. Running `service install`
+again changes the interval. Without systemd, run `dotsync sync` from cron
+or your shell's startup files instead.
 
 ## Dotfiles repo layout
 
