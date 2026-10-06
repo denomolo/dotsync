@@ -106,9 +106,17 @@ dotsync checkout '*'                  # everything in the repo
 | `dotsync service install \| uninstall \| status` | Manage the systemd user service that syncs on login. |
 | `dotsync --version` | Print the installed version. |
 
-`sync`, `push`, `pull`, `add`, `checkout` and `remove` accept `--dry-run`
-to show what would happen; `sync`, `push` and `pull` accept `-v` to list
-unchanged files too.
+`sync`, `push`, `pull`, `add`, `checkout`, `remove`, `var set|unset` and
+`env set|unset` accept `--dry-run` to show what would happen without
+changing anything: incoming changes from GitHub are fetched and previewed
+(including merging `base` into a profile) in a temporary copy, so your
+files, the local clone's branches and its working tree stay exactly as
+they were. `sync`, `push` and `pull` accept `-v` to list unchanged files
+too.
+
+Only one dotsync runs at a time. If you start a command while another one
+is running (for example the login service's `sync`), it waits for it to
+finish, and gives up after two minutes.
 
 ### Output symbols
 

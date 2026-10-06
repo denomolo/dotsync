@@ -22,6 +22,7 @@ Usage:
 
 from __future__ import annotations
 
+import functools
 import glob
 import os
 import sys
@@ -32,6 +33,7 @@ import yaml
 
 from . import __version__
 from .config import Config, CONFIG_PATH, profile_branch
+from .lock import LockTimeout, repo_lock
 from .repo import Repo, GitError, normalize_github_url
 from .renderer import RenderError
 from .sync import Action, Syncer
@@ -86,6 +88,23 @@ def print_results(results, verbose: bool = False, pending: bool = False) -> None
         parts.append(click.style(f"{errors} errors", fg="red"))
 
     click.echo("\n  " + "  ".join(parts))
+
+
+def locked(command):
+    """Run a command while holding the dotsync lock, so runs never overlap."""
+    @functools.wraps(command)
+    def wrapper(*args, **kwargs):
+        cfg = load_config_or_exit()
+        def on_wait(pid: str) -> None:
+            click.echo(click.style(f"Another dotsync is running (pid {pid}); waiting for it…",
+                                   fg="yellow"), err=True)
+        try:
+            with repo_lock(cfg.state_path.parent / "lock", on_wait=on_wait):
+                return command(*args, **kwargs)
+        except LockTimeout as e:
+            click.echo(click.style(str(e), fg="red"), err=True)
+            sys.exit(1)
+    return wrapper
 
 
 def load_config_or_exit() -> Config:
@@ -150,6 +169,7 @@ def install(repo_url: str, profile: str, clone: bool):
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
 @click.option("-v", "--verbose", is_flag=True)
+@locked
 def sync(dry_run: bool, verbose: bool):
     """Bidirectional sync: pull remote changes, push local changes, resolve conflicts."""
     cfg = load_config_or_exit()
@@ -166,6 +186,7 @@ def sync(dry_run: bool, verbose: bool):
 @click.argument("paths", nargs=-1)
 @click.option("--dry-run", is_flag=True)
 @click.option("-v", "--verbose", is_flag=True)
+@locked
 def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     """Force disk → git for all files, or only PATHS (machine-wins).
 
@@ -190,6 +211,7 @@ def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
 @click.argument("paths", nargs=-1)
 @click.option("--dry-run", is_flag=True)
 @click.option("-v", "--verbose", is_flag=True)
+@locked
 def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     """Force git → disk for all files, or only PATHS (git-wins).
 
@@ -211,6 +233,7 @@ def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
 # ── status ─────────────────────────────────────────────────────────────────────
 
 @cli.command()
+@locked
 def status():
     """Show per-file sync state without making any changes."""
     cfg = load_config_or_exit()
@@ -228,6 +251,7 @@ def status():
 @click.option("--allow-private", is_flag=True,
               help="Track files only you can read (e.g. mode 600), which often hold secrets.")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def add(paths: tuple[str, ...], remote: str | None, allow_private: bool, dry_run: bool):
     """Start tracking PATHS (files or directories), stored under files/ in the repo.
 
@@ -293,6 +317,7 @@ def expand_paths(patterns: tuple[str, ...]) -> list[Path]:
 @click.option("--local", type=click.Path(path_type=Path), help="Where to write it on disk.")
 @click.option("--force", is_flag=True, help="Overwrite existing local files that differ.")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def checkout(remotes: tuple[str, ...], local: Path | None, force: bool, dry_run: bool):
     """Start tracking REMOTES that are already in the repo (the reverse of add).
 
@@ -327,6 +352,7 @@ def checkout(remotes: tuple[str, ...], local: Path | None, force: bool, dry_run:
 @cli.command()
 @click.argument("local", type=click.Path(path_type=Path))
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def remove(local: Path, dry_run: bool):
     """Stop tracking LOCAL (a file or directory).
 
@@ -354,6 +380,7 @@ def var():
 
 
 @var.command("list")
+@locked
 def var_list():
     """List variables for the active profile."""
     cfg = load_config_or_exit()
@@ -373,6 +400,7 @@ def var_list():
 @click.option("--yaml", "as_yaml", is_flag=True,
               help="Parse values as YAML (numbers, booleans, lists) instead of plain strings.")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def var_set(assignments: tuple[str, ...], as_yaml: bool, dry_run: bool):
     """Set template variables and re-render the templates that use them.
 
@@ -400,6 +428,7 @@ def var_set(assignments: tuple[str, ...], as_yaml: bool, dry_run: bool):
 @click.argument("names", nargs=-1, required=True)
 @click.option("--force", is_flag=True, help="Unset even if a template still uses the variable.")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def var_unset(names: tuple[str, ...], force: bool, dry_run: bool):
     """Remove template variables.
 
@@ -435,6 +464,7 @@ def env():
 
 
 @env.command("list")
+@locked
 def env_list():
     """List environment variables for the active profile."""
     cfg = load_config_or_exit()
@@ -455,6 +485,7 @@ def env_list():
 @env.command("set")
 @click.argument("assignments", nargs=-1, required=True, metavar="NAME=VALUE...")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def env_set(assignments: tuple[str, ...], dry_run: bool):
     """Set environment variables and regenerate the session environment.
 
@@ -475,6 +506,7 @@ def env_set(assignments: tuple[str, ...], dry_run: bool):
 @env.command("unset")
 @click.argument("names", nargs=-1, required=True)
 @click.option("--dry-run", is_flag=True, help="Show what would happen without making changes.")
+@locked
 def env_unset(names: tuple[str, ...], dry_run: bool):
     """Remove environment variables."""
     _run_var_edit(lambda syncer: syncer.env_unset(list(names)),
@@ -501,6 +533,7 @@ def profile():
 
 
 @profile.command("list")
+@locked
 def profile_list():
     """List available profiles."""
     cfg = load_config_or_exit()
@@ -519,6 +552,7 @@ def profile_list():
 
 @profile.command("set")
 @click.argument("name")
+@locked
 def profile_set(name: str):
     """Switch the active profile."""
     cfg = load_config_or_exit()
@@ -542,6 +576,7 @@ def profile_set(name: str):
 
 @profile.command("new")
 @click.argument("name")
+@locked
 def profile_new(name: str):
     """Create a new profile branch from base."""
     cfg = load_config_or_exit()

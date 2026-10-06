@@ -18,12 +18,16 @@ Conflict resolution modes:
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
+import functools
 import glob
 import os
 import re
 import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 import stat
 import textwrap
 from dataclasses import dataclass
@@ -58,6 +62,24 @@ class FileResult:
     skipped: Optional[str] = None       # why the file was skipped (e.g. "binary")
 
 
+class _PreviewRepo(Repo):
+    """A throwaway worktree used by --dry-run: it never switches branches."""
+
+    def checkout(self, branch: str, create: bool = False) -> None:
+        pass
+
+
+def _previewable(method):
+    """In --dry-run, run `method` against a preview worktree instead of the clone."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not self.dry_run or self._preview_root is not None:
+            return method(self, *args, **kwargs)
+        with self._preview():
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Syncer:
     def __init__(self, config: Config, dry_run: bool = False):
         self.config = config
@@ -66,9 +88,11 @@ class Syncer:
         self.renderer = Renderer(config.repo_path)
         self.state = State.load(config.state_path, config.profile, config.conflict_resolution)
         self.include_binary = config.include_binary
+        self._preview_root: Path | None = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    @_previewable
     def sync(self) -> list[FileResult]:
         """Full bidirectional sync: fetch → decide → act → commit → push."""
         branch = self.config.branch
@@ -107,6 +131,7 @@ class Syncer:
             self.state.save()
         return results
 
+    @_previewable
     def pull_all(self, patterns: list[str] | None = None) -> list[FileResult]:
         """Force repo → disk for all files, or only those matching `patterns` (git-wins)."""
         branch = self.config.branch
@@ -227,6 +252,7 @@ class Syncer:
             raise ValueError(f"{source} already exists in the repo")
         return source
 
+    @_previewable
     def checkout(self, patterns: list[str], local: Path | None = None,
                  force: bool = False) -> list[FileResult]:
         """
@@ -342,6 +368,7 @@ class Syncer:
         self.repo.checkout(self.config.branch)
         return {k: v for k, v in self.renderer.vars.items() if k != "env"}
 
+    @_previewable
     def var_set(self, values: dict[str, object]) -> list[FileResult]:
         """
         Set variables in vars.yaml on the active profile's branch, re-render
@@ -355,6 +382,7 @@ class Syncer:
             message="var: set " + ", ".join(values),
         )
 
+    @_previewable
     def var_unset(self, names: list[str], force: bool = False) -> list[FileResult]:
         """
         Remove variables from vars.yaml on the active profile's branch.
@@ -426,6 +454,7 @@ class Syncer:
                 rows.append((name, raw, None, str(e)))
         return rows
 
+    @_previewable
     def env_set(self, values: dict[str, str]) -> list[FileResult]:
         """Set environment variables in the env: section of vars.yaml."""
         for name, value in values.items():
@@ -435,6 +464,7 @@ class Syncer:
         return self._edit_vars(lambda text: _env_edit(text, set_values=values),
                                message="env: set " + ", ".join(values))
 
+    @_previewable
     def env_unset(self, names: list[str]) -> list[FileResult]:
         """Remove environment variables from the env: section of vars.yaml."""
         self._git_pull(self.config.branch)
@@ -837,6 +867,8 @@ class Syncer:
 
     def _git_pull(self, branch: str) -> None:
         """Pull the profile branch, then merge base into it so shared changes reach every profile."""
+        if self._preview_root is not None or self.dry_run:
+            return   # dry runs never pull; a preview already contains what this would
         try:
             self.repo.checkout(branch)
             if self.repo.remote_ahead(branch):
@@ -847,10 +879,59 @@ class Syncer:
         if branch == "base":
             return
         try:
-            if self.repo.merge_base() and self.config.auto_push and not self.dry_run:
+            if self.repo.merge_base() and self.config.auto_push:
                 self.repo.push(branch)
         except GitError as e:
             print(f"  [warn] Could not merge base into {branch}: {e}")
+
+    @contextmanager
+    def _preview(self):
+        """
+        For --dry-run: build what the clone would look like after pulling (the
+        profile branch, plus origin, plus base merged in) in a temporary git
+        worktree, and point this Syncer at it. The clone's branches, HEAD and
+        files are never touched; only `git fetch` updates remote-tracking refs.
+        """
+        branch = self.config.branch
+        try:
+            self.repo.fetch()
+        except GitError as e:
+            print(f"  [warn] Could not fetch from remote (previewing local state): {e}")
+        self.repo._run("worktree", "prune", check=False)
+
+        tmp = Path(tempfile.mkdtemp(prefix="dotsync-preview-"))
+        worktree = tmp / "repo"
+        start = branch if self.repo.branch_exists(branch) else f"origin/{branch}"
+        if not _ref_exists(self.repo, start):
+            start = "HEAD"
+        self.repo._run("worktree", "add", "--detach", str(worktree), start)
+        preview = _PreviewRepo(worktree)
+        try:
+            refs = [f"origin/{branch}"] + (["origin/base", "base"] if branch != "base" else [])
+            for ref in refs:
+                if not _ref_exists(preview, ref):
+                    continue
+                merged = preview._run("-c", "user.name=dotsync", "-c", "user.email=dotsync@localhost",
+                                      "merge", "--no-edit", ref, check=False)
+                if merged.returncode != 0:
+                    preview._run("merge", "--abort", check=False)
+                    what = "pulling" if ref == f"origin/{branch}" else f"merging {ref} into {branch}"
+                    print(f"  [warn] {what} would conflict; sync would stop there and leave it "
+                          f"for you to resolve. Previewing without it.")
+
+            saved = (self.config, self.repo, self.renderer)
+            self.config = dataclasses.replace(self.config, repo_path=worktree)
+            self.repo, self.renderer = preview, Renderer(worktree)
+            self._preview_root = worktree
+            try:
+                yield
+            finally:
+                self.config, self.repo, self.renderer = saved
+                self._preview_root = None
+        finally:
+            self.repo._run("worktree", "remove", "--force", str(worktree), check=False)
+            shutil.rmtree(tmp, ignore_errors=True)
+            self.repo._run("worktree", "prune", check=False)
 
     def _git_commit_and_push(self, branch: str, message: str | None = None) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -865,6 +946,10 @@ class Syncer:
 
 
 # ── Directory helpers ──────────────────────────────────────────────────────────
+
+def _ref_exists(repo: Repo, ref: str) -> bool:
+    return repo._run("rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
+
 
 _VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

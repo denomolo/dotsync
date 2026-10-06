@@ -4,6 +4,19 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- Only one dotsync runs at a time: commands take a lock on
+  `~/.local/state/dotsync/lock`, wait for a running dotsync (e.g. the login
+  service) to finish, and give up after two minutes.
+
+### Fixed
+- `--dry-run` no longer changes the local clone. `sync`, `pull`,
+  `checkout` and `var`/`env` dry runs used to run `git pull` and merge
+  `base` into the profile branch for real; they now fetch and preview the
+  result in a temporary worktree, so incoming changes are still shown.
+
 ## [0.5.1] - 2026-10-05
 
 ### Added
