@@ -4,6 +4,18 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- Test suite (`pytest`, run with `pip install -e '.[dev]'` then `pytest`)
+  covering tracking, sync decisions, profiles, templates, permissions and
+  `var`/`env`, plus a GitHub Actions workflow running it on Python 3.11–3.14.
+
+### Fixed
+- `dotsync var set` / `env set` failed for names YAML reads as booleans or
+  null (`on`, `off`, `yes`, `no`, `y`, `n`, `true`, `null`); those keys are
+  now quoted in `vars.yaml`.
+
 ## [0.5.0] - 2026-10-05
 
 ### Added

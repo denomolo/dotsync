@@ -20,6 +20,7 @@ which side changed and only asks a conflict policy to decide when both did.
 - [Conflicts](#conflicts)
 - [Configuration](#configuration)
 - [What is not synced](#what-is-not-synced)
+- [Development](#development)
 - [Changelog](#changelog)
 - [License](#license)
 - [How it works](#how-it-works)
@@ -396,6 +397,20 @@ state_path: ~/.local/state/dotsync/state.json
   (usually `644`, or `755` for executables). A file tracked with
   `--allow-private` is therefore *not* kept at `600` on other machines. A
   change to the executable bit alone, with no content change, isn't synced.
+
+## Development
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+```
+
+Each test runs the real CLI in an isolated sandbox: a bare git repo standing
+in for GitHub, a temporary home directory and config, and a fake
+`systemctl` that only records its arguments. Tests never touch your real
+files, dotfiles repo or systemd session. The suite runs on every push and
+pull request (`.github/workflows/tests.yml`).
 
 ## Changelog
 

@@ -985,10 +985,12 @@ def _load_vars_text(text: str) -> dict:
 
 def _yaml_entry(name: str, value: object) -> str:
     """One `name: value` line (lists/maps inline), or a block if the value needs it."""
+    # YAML reads bare keys like `on`, `no` or `y` as booleans; quote those
+    key = name if yaml.safe_load(f"{name}: 0") == {name: 0} else f"'{name}'"
     inline = yaml.safe_dump(value, default_flow_style=True, allow_unicode=True, width=float("inf"))
     inline = inline.removesuffix("\n").removesuffix("\n...").rstrip("\n")
     if "\n" not in inline:
-        return f"{name}: {inline}\n"
+        return f"{key}: {inline}\n"
     return yaml.safe_dump({name: value}, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 

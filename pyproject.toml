@@ -16,6 +16,9 @@ dependencies = [
     "click>=8.1",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 dotsync = "dotsync.__main__:cli"
 
@@ -25,3 +28,7 @@ version = {attr = "dotsync.__version__"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dotsync*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
