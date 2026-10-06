@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-05
 
 ### Added
 - Only one dotsync runs at a time: commands take a lock on
