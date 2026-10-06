@@ -4,7 +4,7 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.8.0] - 2026-10-06
 
 The interface review before 1.0: names, flags and formats below are what 1.0
 will keep stable.
