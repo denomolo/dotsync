@@ -1,23 +1,19 @@
 """
-systemd.py — systemd user units that run `dotsync sync` automatically.
-
-  dotsync.service   runs `dotsync sync` once; enabled for login (after network is up)
-  dotsync.timer     re-runs the service every INTERVAL while you're logged in
+systemd.py — Optional systemd user service that runs `dotsync sync` at login.
 
 Unit files are written to ~/.config/systemd/user/.
 """
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 SERVICE_NAME = "dotsync.service"
-TIMER_NAME = "dotsync.timer"
-DEFAULT_INTERVAL = "1h"
+# Installed by dotsync 0.6.0; removed again by install and uninstall
+OLD_TIMER_NAME = "dotsync.timer"
 
 SERVICE_TEMPLATE = """\
 [Unit]
@@ -38,22 +34,6 @@ TimeoutStartSec=180
 WantedBy=default.target
 """
 
-TIMER_TEMPLATE = """\
-[Unit]
-Description=Run dotsync sync every {interval}
-
-[Timer]
-OnActiveSec={interval}
-OnUnitActiveSec={interval}
-RandomizedDelaySec=2min
-
-[Install]
-WantedBy=timers.target
-"""
-
-# A plain systemd time span such as 30min, 1h or 1d
-_INTERVAL_RE = re.compile(r"\d+\s*(s|sec|m|min|h|hr|d|day|w|week)s?")
-
 
 class SystemdError(Exception):
     pass
@@ -63,55 +43,47 @@ def unit_dir() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
 
 
-def install(interval: str | None = DEFAULT_INTERVAL) -> list[str]:
-    """Write and enable the units. interval=None installs the login-only service."""
-    if interval is not None and not _INTERVAL_RE.fullmatch(interval.strip()):
-        raise SystemdError(f"Invalid interval {interval!r}: use e.g. 30min, 1h or 1d")
+def install() -> list[str]:
+    """Write and enable the login service."""
     _require_systemctl()
     directory = unit_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    messages = []
-
+    messages = _remove_old_timer()
     service = directory / SERVICE_NAME
     service.write_text(SERVICE_TEMPLATE.format(executable=sys.executable))
     messages.append(f"Wrote {service}")
-    timer = directory / TIMER_NAME
-    if interval is not None:
-        timer.write_text(TIMER_TEMPLATE.format(interval=interval.strip()))
-        messages.append(f"Wrote {timer}")
-    elif timer.exists():
-        _systemctl("disable", "--now", TIMER_NAME, check=False)
-        timer.unlink()
-        messages.append(f"Removed {timer}")
-
     _systemctl("daemon-reload")
-    _systemctl("enable", "--now", SERVICE_NAME)
-    if interval is not None:
-        _systemctl("enable", "--now", TIMER_NAME)
-        messages.append(f"dotsync will sync at login (after network is up) and every {interval.strip()}.")
-    else:
-        messages.append("dotsync will sync at login (after network is up).")
+    _systemctl("enable", SERVICE_NAME)
+    messages.append("dotsync will sync at login (after the network is up).")
     return messages
 
 
 def uninstall() -> list[str]:
     _require_systemctl()
-    messages = []
-    for name in (TIMER_NAME, SERVICE_NAME):
-        _systemctl("disable", "--now", name, check=False)
-        path = unit_dir() / name
-        if path.exists():
-            path.unlink()
-            messages.append(f"Removed {path}")
+    messages = _remove_old_timer()
+    _systemctl("disable", SERVICE_NAME, check=False)
+    path = unit_dir() / SERVICE_NAME
+    if path.exists():
+        path.unlink()
+        messages.append(f"Removed {path}")
     _systemctl("daemon-reload")
-    messages.append("dotsync no longer syncs automatically.")
+    messages.append("dotsync no longer syncs at login.")
     return messages
+
+
+def _remove_old_timer() -> list[str]:
+    timer = unit_dir() / OLD_TIMER_NAME
+    if not timer.exists():
+        return []
+    _systemctl("disable", "--now", OLD_TIMER_NAME, check=False)
+    timer.unlink()
+    return [f"Removed {timer} (periodic sync is no longer supported)"]
 
 
 def status() -> str:
     _require_systemctl()
     result = subprocess.run(
-        ["systemctl", "--user", "status", "--no-pager", SERVICE_NAME, TIMER_NAME],
+        ["systemctl", "--user", "status", "--no-pager", SERVICE_NAME],
         text=True, capture_output=True,
     )
     return result.stdout or result.stderr

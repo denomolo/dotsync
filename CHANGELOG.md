@@ -4,6 +4,38 @@ All notable changes to dotsync are documented here. Versions follow
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- `dotsync status [PATH...]` shows the status of just those tracked files or
+  directories, and `--diff` shows how each differing file differs (repo `-`,
+  this machine `+`; directories file by file, templates rendered).
+
+### Changed
+- **Breaking:** `sync` (and the login service) only handles files that were
+  already synced on this machine. Files that are missing here, differ from
+  the repo, or were added by another machine are left alone and listed until
+  you `pull`, `push` or `checkout` them; identical files start syncing
+  quietly. Before, `sync` wrote missing files and treated differing ones as
+  conflicts, so a first sync on a new machine could push the distribution's
+  default `.bashrc` over yours.
+- **Breaking:** the default `conflict_resolution` is now `machine-wins`: the
+  local version wins and the repo's version stays in git history, and the
+  sync output names the commit to recover it from. Existing configs that set
+  `conflict_resolution` explicitly are unchanged.
+- Automatic sync is opt-in and login-only: `install` asks with a default of
+  no, and `service install` no longer adds the hourly timer from 0.6.0 (it
+  removes it if present). The service is enabled for the next login rather
+  than run immediately.
+- `install` never changes files in your home directory, and its closing
+  hints point to `status` and `pull` for a machine joining an existing repo.
+
+### Fixed
+- `install` against a repo whose default branch isn't `base` (e.g. a GitHub
+  repo created with `main`) cloned without checking anything out, mistook it
+  for an empty repo and re-initialised it, ignoring its history. It now checks
+  out `base` (or the chosen profile), and refuses repos with no `base` branch.
+
 ## [0.6.0] - 2026-10-05
 
 ### Added

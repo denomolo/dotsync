@@ -183,13 +183,19 @@ class Repo:
         self._run("commit", "-m", message)
         return True
 
-    def has_commits(self) -> bool:
-        """False for a freshly cloned empty repository."""
-        return self._run("rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode == 0
+    def remote_branches(self) -> list[str]:
+        """Branch names on origin, as of the last fetch or clone."""
+        out = self._run("for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin").stdout
+        return [b for b in out.split() if b != "HEAD"]
 
     def has_uncommitted(self) -> bool:
         result = self._run("status", "--porcelain")
         return bool(result.stdout.strip())
+
+    def last_commit_id(self, path: str) -> str | None:
+        """Short id of the last commit touching `path`, or None."""
+        out = self._run("log", "-1", "--format=%h", "--", path, check=False).stdout.strip()
+        return out or None
 
     def last_commit_time(self, path: str) -> float | None:
         """

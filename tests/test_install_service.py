@@ -72,12 +72,47 @@ def test_second_machine_clones_and_checks_out(sandbox, fresh_machine):
     home_b = fresh_machine("machine-b")
     result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
     assert result.exit_code == 0, result.output
+    # Regression (0.6.0): the remote's default branch is `main`, which doesn't
+    # exist, so nothing got checked out and install wrongly re-initialised it
+    assert "repo is empty" not in result.output
+    clone_b = home_b / ".local/share/dotsync/repo"
+    assert git(clone_b, "rev-parse", "base") == git(remote, "rev-parse", "base")
     sandbox.run("pull")
 
     assert (home_b / ".config/kitty/kitty.conf").read_text() == "font_size 12\n"
 
 
-def test_install_can_set_up_the_service(sandbox, fresh_machine):
+def test_install_refuses_a_repo_that_is_not_a_dotsync_repo(sandbox, fresh_machine):
+    fresh_machine("machine-a")
+    remote = new_remote(sandbox, "other-project.git")
+    work = sandbox.root / "other-project"
+    git(sandbox.root, "clone", "-q", str(remote), str(work))
+    (work / "README").write_text("not dotfiles\n")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "init")
+    git(work, "push", "-q", "origin", "HEAD:main")
+
+    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote)], input="n\n")
+
+    assert result.exit_code != 0
+    assert "doesn't look like a dotsync repo" in result.output
+    assert git(remote, "for-each-ref", "--format=%(refname)").split() == ["refs/heads/main"]
+
+
+def test_install_does_not_enable_autosync_by_default(sandbox, fresh_machine):
+    home = fresh_machine("machine-a")
+    remote = new_remote(sandbox)
+
+    result = sandbox.runner.invoke(cli_module.cli, ["install", "--repo-url", str(remote), "--init"],
+                                   input="\n")   # just press Enter at the prompt
+
+    assert result.exit_code == 0, result.output
+    assert "[y/N]" in result.output
+    assert not (home / ".config/systemd/user/dotsync.service").exists()
+    assert sandbox.systemctl_calls() == []
+
+
+def test_install_can_opt_in_to_sync_at_login(sandbox, fresh_machine):
     home = fresh_machine("machine-a")
     remote = new_remote(sandbox)
 
@@ -85,9 +120,8 @@ def test_install_can_set_up_the_service(sandbox, fresh_machine):
                                    input="y\n")
 
     assert result.exit_code == 0, result.output
-    units = home / ".config/systemd/user"
-    assert (units / "dotsync.service").exists() and (units / "dotsync.timer").exists()
-    assert "--user enable --now dotsync.timer" in sandbox.systemctl_calls()
+    assert (home / ".config/systemd/user/dotsync.service").exists()
+    assert "--user enable dotsync.service" in sandbox.systemctl_calls()
 
 
 # ── service ────────────────────────────────────────────────────────────────────
@@ -96,53 +130,40 @@ def units(sandbox):
     return sandbox.home / ".config/systemd/user"
 
 
-def test_service_install_writes_service_and_hourly_timer(sandbox):
+def test_service_install_enables_login_sync_only(sandbox):
     sandbox.run("service", "install")
 
     service = (units(sandbox) / "dotsync.service").read_text()
-    timer = (units(sandbox) / "dotsync.timer").read_text()
     assert "-m dotsync sync" in service and "WantedBy=default.target" in service
-    assert "OnUnitActiveSec=1h" in timer
-    assert sandbox.systemctl_calls() == [
-        "--user daemon-reload",
-        "--user enable --now dotsync.service",
-        "--user enable --now dotsync.timer",
-    ]
+    assert not (units(sandbox) / "dotsync.timer").exists()
+    # Enabled for the next login, not run right away
+    assert sandbox.systemctl_calls() == ["--user daemon-reload", "--user enable dotsync.service"]
 
 
-def test_service_install_custom_interval_and_no_timer(sandbox):
-    sandbox.run("service", "install", "--interval", "30min")
-    assert "OnUnitActiveSec=30min" in (units(sandbox) / "dotsync.timer").read_text()
+def test_service_install_and_uninstall_remove_a_timer_from_0_6_0(sandbox):
+    units(sandbox).mkdir(parents=True)
+    (units(sandbox) / "dotsync.timer").write_text("[Timer]\nOnUnitActiveSec=1h\n")
 
-    sandbox.run("service", "install", "--no-timer")
+    out = sandbox.run("service", "install").output
 
+    assert "periodic sync is no longer supported" in out
     assert not (units(sandbox) / "dotsync.timer").exists()
     assert "--user disable --now dotsync.timer" in sandbox.systemctl_calls()
 
 
-def test_service_install_rejects_a_bad_interval(sandbox):
-    result = sandbox.run("service", "install", "--interval", "soon", ok=False)
-
-    assert "Invalid interval" in result.output
-    assert not units(sandbox).exists()
-
-
-def test_service_uninstall_removes_both_units(sandbox):
+def test_service_uninstall_removes_the_service(sandbox):
     sandbox.run("service", "install")
 
     sandbox.run("service", "uninstall")
 
     assert not (units(sandbox) / "dotsync.service").exists()
-    assert not (units(sandbox) / "dotsync.timer").exists()
-    calls = sandbox.systemctl_calls()
-    assert "--user disable --now dotsync.timer" in calls
-    assert "--user disable --now dotsync.service" in calls
+    assert "--user disable dotsync.service" in sandbox.systemctl_calls()
 
 
-def test_service_status_asks_systemd_about_both_units(sandbox):
+def test_service_status_asks_systemd(sandbox):
     sandbox.run("service", "status")
 
-    assert sandbox.systemctl_calls() == ["--user status --no-pager dotsync.service dotsync.timer"]
+    assert sandbox.systemctl_calls() == ["--user status --no-pager dotsync.service"]
 
 
 def test_service_without_systemd_fails_cleanly(sandbox, monkeypatch):

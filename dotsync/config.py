@@ -25,7 +25,7 @@ def profile_branch(profile: str) -> str:
 class Config:
     repo_url: str
     profile: str = "base"
-    conflict_resolution: ConflictResolution = "last-write-wins"
+    conflict_resolution: ConflictResolution = "machine-wins"
     auto_push: bool = True
     include_binary: bool = False   # sync binary files too (default: text only)
     repo_path: Path = field(default_factory=lambda: Path("~/.local/share/dotsync/repo").expanduser())
@@ -47,7 +47,7 @@ class Config:
 
         repo_path = Path(raw.get("repo_path", "~/.local/share/dotsync/repo")).expanduser()
         state_path = Path(raw.get("state_path", "~/.local/state/dotsync/state.json")).expanduser()
-        conflict = raw.get("conflict_resolution", "last-write-wins")
+        conflict = raw.get("conflict_resolution", "machine-wins")
 
         if conflict not in ("last-write-wins", "machine-wins", "git-wins"):
             raise ValueError(f"Invalid conflict_resolution: {conflict!r}")
@@ -67,7 +67,7 @@ class Config:
         data = {
             "repo_url": repo_url,
             "profile": profile,
-            "conflict_resolution": "last-write-wins",
+            "conflict_resolution": "machine-wins",
             "auto_push": True,
             "include_binary": False,
             "repo_path": str(self.repo_path),

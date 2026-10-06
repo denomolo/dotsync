@@ -1,7 +1,10 @@
 """sync, push, pull and status: which side wins, and that every win is committed."""
 
 import os
+import re
 import time
+
+from conftest import git
 
 
 def track(sandbox, rel: str, text: str, mode: int | None = None):
@@ -47,6 +50,7 @@ def test_last_write_wins_newer_local_edit_wins_and_is_pushed(sandbox):
     """Regression: the repo side used the clone's mtime, which `git pull`
     resets, so git always won and local edits were overwritten. And a
     machine-side win was left uncommitted in the clone."""
+    sandbox.write_config(conflict_resolution="last-write-wins")
     vimrc = track(sandbox, ".vimrc", "v1\n")
     now = int(time.time())
     other = sandbox.other_machine()
@@ -64,6 +68,7 @@ def test_last_write_wins_newer_local_edit_wins_and_is_pushed(sandbox):
 
 
 def test_last_write_wins_newer_remote_edit_wins(sandbox):
+    sandbox.write_config(conflict_resolution="last-write-wins")
     vimrc = track(sandbox, ".vimrc", "v1\n")
     now = int(time.time())
     vimrc.write_text("local edit\n")
@@ -78,17 +83,32 @@ def test_last_write_wins_newer_remote_edit_wins(sandbox):
     assert vimrc.read_text() == "remote edit\n"
 
 
-def test_machine_wins_policy(sandbox):
-    sandbox.write_config(conflict_resolution="machine-wins")
+def test_machine_wins_is_the_default_and_keeps_the_repo_version_in_history(sandbox):
     vimrc = track(sandbox, ".vimrc", "v1\n")
     other = sandbox.other_machine()
     other.write("files/.vimrc", "remote edit\n")
-    other.commit_and_push(when=int(time.time()) + 3600)   # newer, but policy says disk wins
+    other.commit_and_push(when=int(time.time()) + 3600)   # newer, but disk still wins
+    vimrc.write_text("local edit\n")
+
+    result = sandbox.run("sync")
+
+    assert sandbox.remote_file("files/.vimrc") == "local edit\n"
+    assert vimrc.read_text() == "local edit\n"
+    sha = re.search(r"repo version kept in history at (\w+)", result.output).group(1)
+    assert git(sandbox.repo, "show", f"{sha}:files/.vimrc") == "remote edit\n"
+
+
+def test_git_wins_policy(sandbox):
+    sandbox.write_config(conflict_resolution="git-wins")
+    vimrc = track(sandbox, ".vimrc", "v1\n")
+    other = sandbox.other_machine()
+    other.write("files/.vimrc", "remote edit\n")
+    other.commit_and_push()
     vimrc.write_text("local edit\n")
 
     sandbox.run("sync")
 
-    assert sandbox.remote_file("files/.vimrc") == "local edit\n"
+    assert vimrc.read_text() == "remote edit\n"
 
 
 def test_status_reports_pending_without_changing_anything(sandbox):

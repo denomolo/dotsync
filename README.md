@@ -68,11 +68,11 @@ dotsync install --repo-url <you>/dotfiles
 
 `--repo-url` accepts `owner/repo`, an HTTPS GitHub URL (both converted to
 SSH so your key is used) or any git URL. `install` writes
-`~/.config/dotsync/config.yaml`, and asks whether to install the systemd
-units that run `dotsync sync` at login and every hour (see
-[Automatic sync](#automatic-sync)). If the repo you point it at is still
-empty, `install` sets it up as a new dotsync repo even without `--init`. Use
-`--profile <name>` to start on a profile other than `base`.
+`~/.config/dotsync/config.yaml`, and asks whether to sync automatically at
+login (off unless you say yes; see [Automatic sync](#automatic-sync)). It
+never touches the files in your home directory. If the repo you point it at
+is still empty, `install` sets it up as a new dotsync repo even without
+`--init`. Use `--profile <name>` to start on a profile other than `base`.
 
 ## Quick start
 
@@ -85,11 +85,22 @@ dotsync status
 
 # Sync both ways
 dotsync sync
-
-# On a new machine: bring files from the repo onto disk and track them
-dotsync checkout .vimrc .config/kitty
-dotsync checkout '*'                  # everything in the repo
 ```
+
+On another machine, after `dotsync install`, nothing is synced until you
+say so. `sync` only handles files that were already synced on that
+machine; everything else is listed by `status` and left alone:
+
+```sh
+dotsync status                       # what's in the repo, and what differs here
+dotsync pull                         # take the repo's version of everything
+dotsync pull ~/.config/kitty         # ...or just some files
+dotsync push ~/.bashrc               # keep this machine's version instead
+```
+
+After a file has been pulled or pushed once on a machine, `sync` keeps it
+in step from then on. The same goes for files that another machine adds to
+the repo later: `sync` reports them until you `pull` them.
 
 ## Commands
 
@@ -97,7 +108,7 @@ dotsync checkout '*'                  # everything in the repo
 | --- | --- |
 | `dotsync install` | First-time setup: clone (or `--init`) your dotfiles repo, write the config, optionally install the systemd service. |
 | `dotsync sync` | Two-way sync of every tracked file (see [How it works](#how-it-works)). |
-| `dotsync status` | Show what `sync` would do for each file, without changing anything. |
+| `dotsync status [PATH...] [--diff]` | Show what `sync` would do for each file (or just `PATH`s), without changing anything; `--diff` shows how files differ. |
 | `dotsync push [PATH...]` | Force disk → repo, for every file or just `PATH`s. Commits and pushes. |
 | `dotsync pull [PATH...]` | Force repo → disk, for every file or just `PATH`s. |
 | `dotsync add PATH... [--remote R] [--allow-private]` | Start tracking files or directories from disk. |
@@ -106,7 +117,7 @@ dotsync checkout '*'                  # everything in the repo
 | `dotsync var list \| set NAME=VALUE... \| unset NAME...` | Manage [template variables](#variables). |
 | `dotsync env list \| set NAME=VALUE... \| unset NAME... \| hook` | Manage [environment variables](#environment-variables) for your session. |
 | `dotsync profile list \| set NAME \| new NAME` | Manage [profiles](#profiles). |
-| `dotsync service install \| uninstall \| status` | Sync automatically at login and on a timer ([details](#automatic-sync)). |
+| `dotsync service install \| uninstall \| status` | Opt in to syncing automatically at login ([details](#automatic-sync)). |
 | `dotsync --version` | Print the installed version. |
 
 `sync`, `push`, `pull`, `add`, `checkout`, `remove`, `var set|unset` and
@@ -173,6 +184,21 @@ dotsync checkout .bashrc --force                     # overwrite a different loc
   with **different** content is left alone and reported, unless you pass
   `--force`.
 
+### `status`
+
+```sh
+dotsync status                       # every tracked file
+dotsync status ~/.vimrc              # just one (or several, or a quoted glob)
+dotsync status ~/.config/kitty --diff
+```
+
+`--diff` prints a unified diff for each file that differs, from the repo's
+version (rendered, for templates) to this machine's: `-` lines are only in
+the repo, `+` lines only here. Directories are compared file by file, and
+binary files are only reported as different. `status` compares against the
+local clone and doesn't fetch; `dotsync sync --dry-run` also shows changes
+waiting on GitHub.
+
 ### `push` and `pull`
 
 ```sh
@@ -187,21 +213,20 @@ directory is rejected — use the directory.
 
 ## Automatic sync
 
+Automatic sync is off unless you opt in, and then it only runs at login:
+
 ```sh
-dotsync service install                 # at login, then every hour
-dotsync service install --interval 15min
-dotsync service install --no-timer      # at login only
+dotsync service install      # sync at every login, after the network is up
 dotsync service status
 dotsync service uninstall
 ```
 
-This installs two systemd user units in `~/.config/systemd/user/`:
-`dotsync.service` runs `dotsync sync` once, at login after the network is
-up, and `dotsync.timer` runs it again every interval while you're logged in
-(1 hour by default, with up to 2 minutes of random delay). Output goes to
-the journal: `journalctl --user -u dotsync`. Running `service install`
-again changes the interval. Without systemd, run `dotsync sync` from cron
-or your shell's startup files instead.
+This installs a systemd user unit, `~/.config/systemd/user/dotsync.service`,
+that runs `dotsync sync` once per login; it doesn't run a sync right away.
+Output goes to the journal: `journalctl --user -u dotsync`. Without systemd,
+run `dotsync sync` from your shell's startup files instead. (dotsync 0.6.0
+also installed an hourly `dotsync.timer`; `service install` and `uninstall`
+remove it.)
 
 ## Dotfiles repo layout
 
@@ -383,15 +408,28 @@ line, a format both systemd and POSIX shells read:
 
 ## Conflicts
 
-A conflict means a file changed both on disk and in the repo since the last
-sync (or exists on both sides with different content the first time it is
-synced). `conflict_resolution` in the config decides what happens:
+A conflict means a file changed both on disk and in the repo since it was
+last synced on this machine. (A file that was never synced on this machine
+isn't a conflict: `sync` leaves it alone until you `pull` or `push` it.)
+`conflict_resolution` in the config decides what happens:
 
 | Mode | Behaviour |
 | --- | --- |
-| `last-write-wins` (default) | The newer side wins: the file's modification time on disk vs the time of the last commit that changed it in the repo. |
-| `machine-wins` | Disk always wins (good for propagating one machine's setup). |
-| `git-wins` | The repo always wins (good for recovering a messed-up machine). |
+| `machine-wins` (default) | This machine's version wins and is pushed. |
+| `last-write-wins` | The newer side wins: the file's modification time on disk vs the time of the last commit that changed it in the repo. |
+| `git-wins` | The repo's version wins and overwrites the local file. |
+
+`machine-wins` is the default because it never loses anything: the repo's
+version it replaces stays in git history, while a local file that gets
+overwritten is gone. The sync output shows where to find it:
+
+```
+!  ~/.vimrc  [machine-wins; repo version kept in history at 3f2c1ab]
+```
+```sh
+git -C ~/.local/share/dotsync/repo show 3f2c1ab:files/.vimrc   # view it
+dotsync push ~/.vimrc                                           # after restoring the file
+```
 
 `dotsync push` and `dotsync pull` are one-off overrides equivalent to
 `machine-wins` and `git-wins`.
@@ -404,7 +442,7 @@ synced). `conflict_resolution` in the config decides what happens:
 ```yaml
 repo_url: git@github.com:you/dotfiles.git
 profile: base                          # active profile
-conflict_resolution: last-write-wins   # or machine-wins / git-wins
+conflict_resolution: machine-wins      # or last-write-wins / git-wins
 auto_push: true                        # push to GitHub after each commit
 include_binary: false                  # sync binary files too
 repo_path: ~/.local/share/dotsync/repo
@@ -506,9 +544,9 @@ last time it synced that file.
 %%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 28, "padding": 6, "diagramPadding": 4}}}%%
 flowchart LR
     f(["file"]) --> known{"synced<br/>before?"}
-    known -- no --> ondisk{"on disk?"}
-    ondisk -- no --> pullnew["↓ pull"]
-    ondisk -- yes --> same
+    known -- no --> samenew{"disk =<br/>repo?"}
+    samenew -- yes --> recnew["· record"]
+    samenew -- no --> wait["- skip until<br/>pull / push"]
     known -- yes --> changed{"changed<br/>since?"}
     changed -- neither --> nothing["· in sync"]
     changed -- disk --> push["↑ push"]
@@ -518,5 +556,7 @@ flowchart LR
     same -- no --> conf["! conflict"]
 ```
 
-*record*: nothing to copy, just remember the hash. *conflict*: settled by
-`conflict_resolution` (see [Conflicts](#conflicts)).
+*record*: nothing to copy, just remember the hash. *skip*: a file never
+synced on this machine (missing here, or different) is left alone until you
+`pull` or `push` it. *conflict*: settled by `conflict_resolution` (default
+`machine-wins`; see [Conflicts](#conflicts)).

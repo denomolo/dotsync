@@ -6,7 +6,7 @@ Usage:
     dotsync sync [--dry-run]         Bidirectional sync (default)
     dotsync push [<path>...]         Force disk → git (all, or just <path>s)
     dotsync pull [<path>...]         Force git → disk (all, or just <path>s)
-    dotsync status                   Show per-file state
+    dotsync status [<path>...]       Show per-file state (--diff for details)
     dotsync add <path>...            Track files/dirs, copying them to the repo (--remote R)
     dotsync checkout <remote>...     Track repo files, writing them to disk (--local L)
     dotsync remove <local>           Stop tracking a file/dir (disk copy is kept)
@@ -15,9 +15,9 @@ Usage:
     dotsync profile list             List available profiles
     dotsync profile set <name>       Switch active profile
     dotsync profile new <name>       Create a new profile branch
-    dotsync service install          Sync at login and hourly (--interval, --no-timer)
-    dotsync service uninstall        Stop syncing automatically
-    dotsync service status           Show the systemd service and timer status
+    dotsync service install          Sync automatically at login (opt-in)
+    dotsync service uninstall        Stop syncing at login
+    dotsync service status           Show the login service status
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from .config import Config, CONFIG_PATH, profile_branch
 from .lock import LockTimeout, repo_lock
 from .repo import Repo, GitError, normalize_github_url
 from .renderer import RenderError
-from .sync import Action, Syncer, find_private
+from .sync import NOT_SET_UP, Action, Syncer, find_private
 from . import systemd
 
 
@@ -89,6 +89,11 @@ def print_results(results, verbose: bool = False, pending: bool = False) -> None
         parts.append(click.style(f"{errors} errors", fg="red"))
 
     click.echo("\n  " + "  ".join(parts))
+    if any(r.skipped == NOT_SET_UP for r in results):
+        click.echo(click.style(
+            "\n  Files not synced on this machine yet are left alone. Run `dotsync pull <path>`\n"
+            "  to take the repo's version or `dotsync push <path>` to keep this machine's\n"
+            "  (`dotsync pull` alone takes the repo's version of everything).", fg="bright_black"))
 
 
 def locked(command):
@@ -151,28 +156,42 @@ def install(repo_url: str, profile: str, clone: bool):
         except GitError as e:
             click.echo(click.style(str(e), fg="red"), err=True)
             sys.exit(1)
-        if not repo.has_commits():
+        branches = repo.remote_branches()
+        if not branches:
             # A brand-new, empty GitHub repo: set it up instead of leaving a broken clone
             click.echo("The repo is empty, so setting it up as a new dotsync repo …")
             shutil.rmtree(cfg.repo_path)
             repo = Repo.init(cfg.repo_path, repo_url)
+        else:
+            # The repo's default branch may not be base (e.g. GitHub's `main`),
+            # in which case git checked out the wrong branch or nothing at all
+            target = cfg.branch if cfg.branch in branches else "base"
+            if target not in branches:
+                shutil.rmtree(cfg.repo_path)
+                click.echo(click.style(
+                    f"{repo_url} has no `base` branch, so it doesn't look like a dotsync repo "
+                    f"(branches: {', '.join(branches)}). Point --repo-url at your dotfiles repo, "
+                    "or at a new empty one.", fg="red"), err=True)
+                sys.exit(1)
+            repo.checkout(target)
     else:
         click.echo(f"Initialising new repo at {cfg.repo_path} …")
         repo = Repo.init(cfg.repo_path, repo_url)
 
     cfg.write_default(repo_url, profile)
 
-    if click.confirm(f"Install systemd user service (sync at login and every "
-                     f"{systemd.DEFAULT_INTERVAL})?", default=True):
+    if click.confirm("Sync automatically at login? (you can turn it on later with "
+                     "`dotsync service install`)", default=False):
         try:
             for line in systemd.install():
                 click.echo(line)
         except systemd.SystemdError as e:
             click.echo(click.style(f"Skipped the service: {e}", fg="yellow"), err=True)
 
-    click.echo(click.style("\ndotsync installed. Next:", fg="green"))
-    click.echo("  dotsync add ~/.vimrc ~/.config/kitty     # start tracking files")
-    click.echo("  dotsync checkout '*'                     # or bring an existing repo's files here")
+    click.echo(click.style("\ndotsync installed. Nothing on disk was changed. Next:", fg="green"))
+    click.echo("  dotsync add ~/.vimrc ~/.config/kitty   # start tracking files from this machine")
+    click.echo("  dotsync status                         # joining an existing repo: see what's there,")
+    click.echo("  dotsync pull                           # then take the repo's files (or `pull <path>`)")
 
 
 # ── sync ───────────────────────────────────────────────────────────────────────
@@ -244,14 +263,40 @@ def pull(paths: tuple[str, ...], dry_run: bool, verbose: bool):
 # ── status ─────────────────────────────────────────────────────────────────────
 
 @cli.command()
+@click.argument("paths", nargs=-1)
+@click.option("--diff", "show_diff", is_flag=True, help="Show how each differing file differs.")
 @locked
-def status():
-    """Show per-file sync state without making any changes."""
+def status(paths: tuple[str, ...], show_diff: bool):
+    """Show what `sync` would do for each file, without changing anything.
+
+    PATHS limits it to those tracked files or directories (quoted globs are
+    matched against tracked paths). --diff also shows how each differing
+    file differs: `-` lines are the repo's version, `+` lines this machine's.
+    """
     cfg = load_config_or_exit()
     click.echo(f"Status (profile: {click.style(cfg.profile, fg='cyan')}) …\n")
     syncer = Syncer(cfg, dry_run=True)
-    results = syncer.status()
+    try:
+        results = syncer.status(list(paths))
+    except ValueError as e:
+        click.echo(click.style(str(e), fg="red"), err=True)
+        sys.exit(1)
     print_results(results, verbose=True, pending=True)
+    if show_diff:
+        for r in results:
+            if r.source.startswith("files/") and (r.action != Action.NOTHING or r.skipped):
+                print_diff(syncer.diff(r.source, r.dest))
+
+
+def print_diff(lines: list[str]) -> None:
+    if not lines:
+        return
+    click.echo()
+    colours = {"+++": "bright_white", "---": "bright_white", "+": "green", "-": "red", "@": "cyan"}
+    for line in lines:
+        line = line.rstrip("\n")
+        colour = next((c for prefix, c in colours.items() if line.startswith(prefix)), None)
+        click.echo(click.style(line, fg=colour, bold=line.startswith(("+++", "---"))) if colour else line)
 
 
 # ── add ────────────────────────────────────────────────────────────────────────
@@ -618,23 +663,20 @@ def service():
 
 
 @service.command("install")
-@click.option("--interval", default=systemd.DEFAULT_INTERVAL, show_default=True,
-              help="How often to sync while logged in (e.g. 30min, 2h, 1d).")
-@click.option("--no-timer", is_flag=True, help="Only sync at login, never periodically.")
-def service_install(interval: str, no_timer: bool):
-    """Install the systemd user units: sync at login and every INTERVAL."""
-    _run_systemd(lambda: systemd.install(None if no_timer else interval))
+def service_install():
+    """Sync automatically at login (systemd user service)."""
+    _run_systemd(systemd.install)
 
 
 @service.command("uninstall")
 def service_uninstall():
-    """Remove the systemd user units (stop syncing automatically)."""
+    """Stop syncing automatically at login."""
     _run_systemd(systemd.uninstall)
 
 
 @service.command("status")
 def service_status():
-    """Show the status of the systemd service and timer."""
+    """Show the status of the login service."""
     _run_systemd(lambda: [systemd.status()])
 
 

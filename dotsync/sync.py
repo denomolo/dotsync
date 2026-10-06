@@ -11,14 +11,16 @@ For each file in the manifest, the decision matrix is:
   True         | True         | CONFLICT → resolve per conflict_resolution
 
 Conflict resolution modes:
-  last-write-wins  — compare disk mtime vs repo file mtime; winner overwrites
-  machine-wins     — disk always wins (good for initial propagation)
+  machine-wins     — disk wins (default): the repo's version stays in git
+                     history, while a local file that's overwritten is gone
+  last-write-wins  — newer side wins (disk mtime vs last commit time)
   git-wins         — repo always wins (good for recovering from local mess)
 """
 
 from __future__ import annotations
 
 import dataclasses
+import difflib
 import fnmatch
 import functools
 import glob
@@ -50,6 +52,10 @@ class Action(Enum):
     PULL      = auto()   # repo → disk
     CONFLICT  = auto()
     UNTRACK   = auto()   # removed from tracking (disk file left alone)
+
+
+# Skip reason for tracked files that were never synced on this machine
+NOT_SET_UP = "not synced on this machine yet"
 
 
 @dataclass
@@ -142,15 +148,47 @@ class Syncer:
             self.state.save()
         return results + (self._env_results() if not patterns else [])
 
-    def status(self) -> list[FileResult]:
-        """Dry-run: report per-file action without making changes."""
+    def status(self, patterns: list[str] | None = None) -> list[FileResult]:
+        """Report what sync would do for each file (or those matching `patterns`), changing nothing."""
         old_dry = self.dry_run
         self.dry_run = True
         try:
-            manifest = self.renderer.load_manifest()
-            return [self._process_entry(entry) for entry in manifest] + self._env_results()
+            manifest = self._select_entries(self.renderer.load_manifest(), patterns)
+            results = [self._process_entry(entry) for entry in manifest]
+            return results + (self._env_results() if not patterns else [])
         finally:
             self.dry_run = old_dry
+
+    def diff(self, source: str, dest: Path) -> list[str]:
+        """
+        Unified diff from the repo's version (rendered, for templates) to the
+        file on this machine. Directories are compared file by file. Empty if
+        they match.
+        """
+        try:
+            abs_source = self.renderer.resolve_source(source)
+        except RenderError:
+            abs_source = self.config.repo_path / source
+        shown = str(dest).replace(str(Path.home()), "~", 1)
+
+        if abs_source.is_dir() or dest.is_dir():
+            def files(root: Path) -> dict[str, Path]:
+                if not root.is_dir():
+                    return {}
+                return {f.relative_to(root).as_posix(): f for f in iter_dir_files(root, include_binary=True)}
+            repo_files, disk_files = files(abs_source), files(dest)
+            lines = []
+            for rel in sorted(repo_files.keys() | disk_files.keys()):
+                lines += _diff_files(repo_files.get(rel), disk_files.get(rel),
+                                     f"repo: {source}/{rel}", f"here: {shown}/{rel}")
+            return lines
+
+        try:
+            repo_bytes = self.renderer.render(source) if abs_source.exists() else None
+        except RenderError as e:
+            return [f"(can't render {source}: {e})\n"]
+        disk_bytes = dest.read_bytes() if dest.is_file() else None
+        return _diff_bytes(repo_bytes, disk_bytes, f"repo: {source}", f"here: {shown}")
 
     def add(self, locals_: list[Path], remote: str | None = None,
             allow_private: bool = False) -> list[FileResult]:
@@ -688,20 +726,15 @@ class Syncer:
         disk_changed = disk_hash != last_hash
         repo_changed = repo_hash != last_hash
 
-        # New file: no state yet
+        # Never synced on this machine: sync doesn't bring it into play by
+        # itself. pull, push or checkout does that explicitly.
         if last_hash is None:
-            if disk_hash is None:
-                # File doesn't exist on disk — pull from repo
-                action = Action.PULL
-            elif disk_hash == repo_hash:
-                # Already in sync, just record state
+            if disk_hash == repo_hash:
+                # Identical already, so nothing changes: just start tracking state
                 if not self.dry_run:
                     self.state.record_hash(dest, repo_hash)
                 return FileResult(dest=dest, source=source, action=Action.NOTHING)
-            else:
-                # Disk has content, repo has different content, no prior state
-                # Treat as conflict, resolve per policy
-                action = Action.CONFLICT
+            return FileResult(dest=dest, source=source, action=Action.NOTHING, skipped=NOT_SET_UP)
         elif not disk_changed and not repo_changed:
             action = Action.NOTHING
         elif disk_hash == repo_hash:
@@ -831,9 +864,7 @@ class Syncer:
         mode = self.config.conflict_resolution
 
         if mode == "machine-wins":
-            result = self._push_file(source, dest)
-            result.resolved_by = "machine-wins"
-            return result
+            return self._machine_wins(source, dest, "machine-wins")
 
         if mode == "git-wins":
             result = self._pull_file(source, dest, rendered)
@@ -850,12 +881,21 @@ class Syncer:
             repo_mtime = _mtime(repo_source, self.include_binary)
 
         if disk_mtime >= repo_mtime:
-            result = self._push_file(source, dest)
-            result.resolved_by = "last-write-wins → machine"
+            result = self._machine_wins(source, dest, "last-write-wins → machine")
         else:
             result = self._pull_file(source, dest, rendered)
             result.resolved_by = "last-write-wins → git"
 
+        result.action = Action.CONFLICT
+        return result
+
+    def _machine_wins(self, source: str, dest: Path, how: str) -> FileResult:
+        """Push the disk version, noting where the repo's version can be recovered."""
+        previous = self.repo.last_commit_id(source)
+        result = self._push_file(source, dest)
+        result.resolved_by = how
+        if previous and not result.error and not self.dry_run:
+            result.resolved_by += f"; repo version kept in history at {previous}"
         result.action = Action.CONFLICT
         return result
 
@@ -946,6 +986,27 @@ class Syncer:
 
 
 # ── Directory helpers ──────────────────────────────────────────────────────────
+
+def _diff_files(repo_file: Path | None, disk_file: Path | None, repo_label: str,
+                disk_label: str) -> list[str]:
+    return _diff_bytes(repo_file.read_bytes() if repo_file else None,
+                       disk_file.read_bytes() if disk_file else None, repo_label, disk_label)
+
+
+def _diff_bytes(repo: bytes | None, disk: bytes | None, repo_label: str, disk_label: str) -> list[str]:
+    """Unified diff lines from the repo's content to the disk's (None = missing)."""
+    if repo == disk:
+        return []
+    if b"\0" in (repo or b"")[:8192] or b"\0" in (disk or b"")[:8192]:
+        return [f"Binary files {repo_label} and {disk_label} differ\n"]
+    def text(data: bytes | None) -> list[str]:
+        return [] if data is None else data.decode("utf-8", errors="replace").splitlines(keepends=True)
+    lines = list(difflib.unified_diff(text(repo), text(disk),
+                                      repo_label if repo is not None else "/dev/null",
+                                      disk_label if disk is not None else "/dev/null"))
+    # Mark a missing final newline the way git does, so the line breaks stay readable
+    return [l if l.endswith("\n") else l + "\n\\ No newline at end of file\n" for l in lines]
+
 
 def _ref_exists(repo: Repo, ref: str) -> bool:
     return repo._run("rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0

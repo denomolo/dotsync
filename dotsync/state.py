@@ -6,7 +6,7 @@ State lives at ~/.local/state/dotsync/state.json (gitignored, machine-local).
 Schema:
 {
   "profile": "personal",
-  "conflict_resolution": "last-write-wins",
+  "conflict_resolution": "machine-wins",
   "files": {
     "/home/user/.zshrc": {
       "last_applied_hash": "abc123...",
@@ -36,7 +36,7 @@ class FileState:
 class State:
     path: Path
     profile: str = "base"
-    conflict_resolution: str = "last-write-wins"
+    conflict_resolution: str = "machine-wins"
     files: dict[str, FileState] = field(default_factory=dict)
 
     # ── Persistence ────────────────────────────────────────────────────────────
