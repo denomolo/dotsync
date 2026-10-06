@@ -4,7 +4,7 @@ All notable changes to syncdot (called dotsync up to 0.8.0) are documented here.
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.9.0] - 2026-10-06
 
 ### Changed
 - **Breaking:** dotsync is now **syncdot**, to stop colliding with several
