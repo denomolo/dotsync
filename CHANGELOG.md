@@ -4,6 +4,17 @@ All notable changes to syncdot (called dotsync up to 0.8.0) are documented here.
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+- Files inside a tracked directory that a `.gitignore` *in that directory*
+  ignores (e.g. `doc/tags` in vim plugins under `~/.vim`) were never
+  committed: git honoured the nested `.gitignore`, so the files never reached
+  GitHub or other machines, while `sync` reported them as in sync and the
+  fetching `status` kept showing a pull. Everything under `files/` is now
+  committed regardless of nested `.gitignore` files, and new files hidden by
+  one are noticed and committed by the next `sync` or `push`.
+
 ## [0.9.0] - 2026-10-06
 
 ### Changed

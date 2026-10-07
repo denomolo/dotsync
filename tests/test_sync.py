@@ -204,3 +204,25 @@ def test_binary_files_inside_directories_are_skipped(sandbox):
 
     assert (sandbox.repo / "files/.config/app/conf").exists()
     assert not (sandbox.repo / "files/.config/app/blob.bin").exists()
+
+
+def test_gitignore_files_inside_tracked_directories_dont_hide_files(sandbox):
+    """Regression: a plugin's own .gitignore (e.g. `doc/tags` in a vim plugin
+    under ~/.vim) made git leave those files out of every commit, so other
+    machines never got them and the fetching status kept saying 'pull'."""
+    sandbox.file(".vim/bundle/plugin/.gitignore", "doc/tags\n")
+    sandbox.file(".vim/bundle/plugin/doc/plugin.txt", "help\n")
+    tags = sandbox.file(".vim/bundle/plugin/doc/tags", "tag1\n")
+
+    sandbox.run("add", "~/.vim")
+
+    assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags") == "tag1\n"
+    assert "already in sync" in sandbox.run("status").output          # fetching status agrees
+
+    tags.write_text("tag1\ntag2\n")
+    sandbox.file(".vim/bundle/plugin/doc/tags-new", "new ignored-looking file\n")
+    (sandbox.home / ".vim/bundle/plugin/.gitignore").write_text("doc/tags*\n")
+    sandbox.run("sync")
+    assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags") == "tag1\ntag2\n"
+    assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags-new") == "new ignored-looking file\n"
+    assert sandbox.repo_dirty() == ""

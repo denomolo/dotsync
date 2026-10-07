@@ -175,8 +175,15 @@ class Repo:
 
     # ── Staging and committing ─────────────────────────────────────────────────
 
-    def add_all(self) -> None:
-        self._run("add", "-A")
+    def add_all(self, env: dict[str, str] | None = None) -> None:
+        """
+        Stage everything. Tracked dotfiles under files/ are always staged,
+        even when a .gitignore inside them (e.g. a vim plugin's own) would
+        make git skip them: syncdot copies directories verbatim.
+        """
+        self._run("add", "-A", env=env)
+        if (self.path / "files").is_dir():
+            self._run("add", "-A", "--force", "--", "files", env=env)
 
     def commit(self, message: str) -> bool:
         """Commit staged changes. Returns True if a commit was made."""
@@ -194,7 +201,7 @@ class Repo:
         """
         env = {"GIT_INDEX_FILE": str(scratch / "index")}
         self._run("read-tree", "HEAD", env=env)
-        self._run("add", "-A", env=env)
+        self.add_all(env=env)
         tree = self._run("write-tree", env=env).stdout.strip()
         return self._run("-c", "user.name=syncdot", "-c", "user.email=syncdot@localhost",
                          "commit-tree", tree, "-p", "HEAD", "-m", "syncdot preview",
@@ -206,8 +213,12 @@ class Repo:
         return [b for b in out.split() if b != "HEAD"]
 
     def has_uncommitted(self) -> bool:
-        result = self._run("status", "--porcelain")
-        return bool(result.stdout.strip())
+        if self._run("status", "--porcelain").stdout.strip():
+            return True
+        # New files under files/ that a nested .gitignore hides from `status`
+        ignored = self._run("ls-files", "--others", "--ignored", "--exclude-standard", "--",
+                            "files", check=False).stdout
+        return bool(ignored.strip())
 
     def last_commit_id(self, path: str) -> str | None:
         """Short id of the last commit touching `path`, or None."""
