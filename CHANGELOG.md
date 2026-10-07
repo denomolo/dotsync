@@ -4,7 +4,7 @@ All notable changes to syncdot (called dotsync up to 0.8.0) are documented here.
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
-## [Unreleased]
+## [0.9.2] - 2026-10-07
 
 ### Added
 - When `sync` or `push` commits changes that none of the listed files account

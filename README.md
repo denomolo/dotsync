@@ -48,7 +48,7 @@ The optional auto-sync service needs systemd.
 ### 1. Install the tool
 
 ```sh
-pipx install git+https://github.com/denomolo/syncdot.git@v0.9.1
+pipx install git+https://github.com/denomolo/syncdot.git@v0.9.2
 syncdot --version
 ```
 
