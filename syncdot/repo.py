@@ -185,6 +185,11 @@ class Repo:
         if (self.path / "files").is_dir():
             self._run("add", "-A", "--force", "--", "files", env=env)
 
+    def last_commit_files(self) -> list[str]:
+        """Paths changed by the latest commit."""
+        out = self._run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD", check=False).stdout
+        return out.split()
+
     def commit(self, message: str) -> bool:
         """Commit staged changes. Returns True if a commit was made."""
         result = self._run("diff", "--cached", "--quiet", check=False)

@@ -101,6 +101,7 @@ class Syncer:
         self.state = State.load(config.state_path, config.profile, config.conflict_resolution)
         self.include_binary = config.include_binary
         self._preview_root: Path | None = None
+        self.notes: list[str] = []   # extra things to tell the user after the results
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -119,7 +120,8 @@ class Syncer:
         # 3. Commit whatever changed in the repo: pushes, and conflicts the
         #    machine won (those are reported as CONFLICT, not PUSH)
         if not self.dry_run and self.repo.has_uncommitted():
-            self._git_commit_and_push(branch)
+            if self._git_commit_and_push(branch):
+                self._note_unexplained_commit(results)
 
         # 4. Save updated state
         if not self.dry_run:
@@ -139,7 +141,8 @@ class Syncer:
                 pushed = [r.source for r in results if not r.error and not r.skipped]
                 message = (f"push: {pushed[0]}" if len(pushed) == 1
                            else f"push: {len(pushed)} files\n\n" + "\n".join(pushed))
-            self._git_commit_and_push(branch, message=message)
+            if self._git_commit_and_push(branch, message=message):
+                self._note_unexplained_commit(results)
             self.state.save()
         return results
 
@@ -1028,8 +1031,10 @@ class Syncer:
             shutil.rmtree(tmp, ignore_errors=True)
             self.repo._run("worktree", "prune", check=False)
 
-    def _git_commit_and_push(self, branch: str, message: str | None = None) -> None:
+    def _git_commit_and_push(self, branch: str, message: str | None = None) -> bool:
+        """Commit everything in the clone and push it. Returns True if a commit was made."""
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        committed = False
         try:
             self.repo.checkout(branch)
             self.repo.add_all()
@@ -1038,6 +1043,21 @@ class Syncer:
                 self.repo.push(branch)
         except GitError as e:
             print(f"  [warn] Git commit/push failed: {e}")
+        return committed
+
+    def _note_unexplained_commit(self, results: list[FileResult]) -> None:
+        """Mention files the last commit changed that no pushed result accounts for,
+        e.g. hand edits in the clone, or files a nested .gitignore kept out before."""
+        explained = [r.source for r in results
+                     if r.source and not r.error and r.action in (Action.PUSH, Action.CONFLICT)]
+        extra = [f for f in self.repo.last_commit_files()
+                 if not any(f == src or f.startswith(src + "/") for src in explained)]
+        if not extra:
+            return
+        shown = extra[:5] + ([f"… and {len(extra) - 5} more"] if len(extra) > 5 else [])
+        noun = "file" if len(extra) == 1 else "files"
+        self.notes.append(f"Also committed changes the repo hadn't recorded yet ({len(extra)} {noun}):\n"
+                          + "\n".join(f"    {f}" for f in shown))
 
 
 # ── Directory helpers ──────────────────────────────────────────────────────────

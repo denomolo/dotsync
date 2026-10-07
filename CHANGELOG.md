@@ -4,6 +4,14 @@ All notable changes to syncdot (called dotsync up to 0.8.0) are documented here.
 [Semantic Versioning](https://semver.org/); while on 0.x, minor releases may
 include breaking changes.
 
+## [Unreleased]
+
+### Added
+- When `sync` or `push` commits changes that none of the listed files account
+  for (hand edits in the clone such as `vars.yaml`, or files an earlier
+  version left out because of a nested `.gitignore`), it says so after the
+  summary and lists them, instead of reporting only "already in sync".
+
 ## [0.9.1] - 2026-10-06
 
 ### Fixed

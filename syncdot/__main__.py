@@ -243,7 +243,10 @@ def sync(dry_run: bool, verbose: bool):
     click.echo(f"{label}Syncing profile {click.style(cfg.profile, fg='cyan')} …\n")
     syncer = Syncer(cfg, dry_run=dry_run)
     results = syncer.sync()
-    if print_results(results, verbose=verbose, pending=dry_run):
+    errors = print_results(results, verbose=verbose, pending=dry_run)
+    for note in syncer.notes:
+        click.echo(f"\n  {note}")
+    if errors:
         sys.exit(1)
 
 
@@ -269,7 +272,10 @@ def push(paths: tuple[str, ...], dry_run: bool, verbose: bool):
     except (ValueError, GitError, RenderError) as e:
         click.echo(click.style(str(e), fg="red"), err=True)
         sys.exit(1)
-    if print_results(results, verbose=verbose or bool(paths), pending=dry_run):
+    errors = print_results(results, verbose=verbose or bool(paths), pending=dry_run)
+    for note in syncer.notes:
+        click.echo(f"\n  {note}")
+    if errors:
         sys.exit(1)
 
 

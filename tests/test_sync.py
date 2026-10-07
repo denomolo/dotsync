@@ -226,3 +226,30 @@ def test_gitignore_files_inside_tracked_directories_dont_hide_files(sandbox):
     assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags") == "tag1\ntag2\n"
     assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags-new") == "new ignored-looking file\n"
     assert sandbox.repo_dirty() == ""
+
+
+def test_sync_reports_committing_changes_the_repo_had_not_recorded(sandbox):
+    """A sync that commits more than its file results explain says so."""
+    sandbox.file(".vim/bundle/plugin/doc/plugin.txt", "help\n")
+    sandbox.run("add", "~/.vim")
+    # The same new file on disk and in the clone's working tree (like files a
+    # nested .gitignore kept out of earlier commits): nothing to copy
+    for root in (sandbox.home, sandbox.repo / "files"):
+        (root / ".vim/bundle/plugin/doc/tags").write_text("t\n")
+    (sandbox.repo / "vars.yaml").write_text("email: a@b\n")      # hand edit in the clone
+
+    out = sandbox.run("sync").output
+
+    assert "already in sync" in out
+    assert "Also committed changes the repo hadn't recorded yet (2 files)" in out
+    assert "files/.vim/bundle/plugin/doc/tags" in out and "vars.yaml" in out
+    assert sandbox.remote_file("files/.vim/bundle/plugin/doc/tags") == "t\n"
+
+
+def test_ordinary_pushes_are_not_reported_twice(sandbox):
+    vimrc = track(sandbox, ".vimrc", "v1\n")
+    vimrc.write_text("v2\n")
+
+    out = sandbox.run("sync").output
+
+    assert "↑ 1 pushed" in out and "Also committed" not in out
