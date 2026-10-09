@@ -1,4 +1,7 @@
-# syncdot
+<h1 align="center">
+  <img src="https://raw.githubusercontent.com/denomolo/syncdot/main/assets/logo.svg" alt="syncdot" width="600">
+</h1>
+
 Author's Note:
 I wanted to play a bit with Claude and see what it could do. Thought of building something that I could use on a daily basis. I've been a fan of chezmoi for a while but remembering the sync model and the syntax every time that I just wanted to backup or pull a file made me abandon it long ago.
 
@@ -592,3 +595,20 @@ flowchart LR
 synced on this machine (missing here, or different) is left alone until you
 `pull` or `push` it. *conflict*: settled by `conflict_resolution` (default
 `local-wins`; see [Conflicts](#conflicts)).
+
+<details>
+<summary>syncdot in ASCII, for terminals and plain text</summary>
+
+```text
+                                                    oo                oo
+                                                    oo                oo
+  oooooooo oo      oo oo  oooo     oooooooo   oooooooo   oooooo   oooooooooo
+oo         oo      oo oooo    oo oo         oo      oo oo      oo     oo
+  oooooo   oo      oo oo      oo oo         oo      oo oo      oo     oo
+        oo oo      oo oo      oo oo         oo      oo oo      oo     oo
+oooooooo     oooooooo oo      oo   oooooooo   oooooooo   oooooo         oooo
+                   oo
+           oooooooo
+```
+
+</details>
